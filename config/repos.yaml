@@ -1,0 +1,38 @@
+# NIM Usage Scanner Configuration
+# This file defines the repositories to scan for NIM usage
+
+version: "1.0"
+
+# Default settings applied to all repositories
+defaults:
+  branch: main
+  depth: 1
+
+# List of repositories to scan
+repos:
+  # Add more repositories here...
+  # - name: org/repo-name
+  #   url: https://github.com/org/repo-name.git
+  #   branch: develop  # optional, overrides default
+  #   depth: 5         # optional, overrides default
+  #   enabled: false   # optional, skip this repo
+
+  - name: NVIDIA-AI-Blueprints/streaming-data-to-rag
+    url: https://github.com/NVIDIA-AI-Blueprints/streaming-data-to-rag.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/ambient-healthcare-agents
+    url: https://github.com/NVIDIA-AI-Blueprints/ambient-healthcare-agents.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/biomedical-aiq-research-agent
+    url: https://github.com/NVIDIA-AI-Blueprints/biomedical-aiq-research-agent.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/single-cell-analysis-blueprint
+    url: https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint.git
+    branch: main
+    enabled: true
