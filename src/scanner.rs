@@ -3,12 +3,14 @@
 //! This module implements the core scanning logic to detect Local NIM (Docker images)
 //! and Hosted NIM (API endpoints) references in source code.
 
+use std::collections::HashSet;
 use std::path::Path;
 use regex::Regex;
 use once_cell::sync::Lazy;
-use log::{debug, warn};
+use log::{debug, warn, info};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
+use serde_json::Value;
 
 use crate::models::{LocalNimMatch, HostedNimMatch, NimFindings, SourceType};
 
@@ -33,8 +35,13 @@ static HOSTED_ENDPOINT: Lazy<Regex> = Lazy::new(|| {
         .expect("Invalid HOSTED_ENDPOINT regex")
 });
 
+/// Build Page links - matches https://build.nvidia.com/<org>/<model>
+static BUILD_PAGE_URL: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"https?://build\.nvidia\.com/([a-zA-Z0-9._-]+)/([a-zA-Z0-9._-]+)"#)
+        .expect("Invalid BUILD_PAGE_URL regex")
+});
+
 /// Model assignment pattern - matches model = "xxx" or model: "xxx"
-/// Must contain "/" or known prefixes to avoid false positives
 static MODEL_ASSIGN: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"model\s*[=:]\s*["']((nvidia|meta|mistralai|google|deepseek|stg)/[^"']+|[^"']+/[^"']+)["']"#)
         .expect("Invalid MODEL_ASSIGN regex")
@@ -83,6 +90,7 @@ pub fn determine_source_type(file_path: &str) -> SourceType {
 const SCAN_EXTENSIONS: &[&str] = &[
     "py", "yaml", "yml", "sh", "bash", "js", "ts", "jsx", "tsx",
     "dockerfile", "env", "json", "toml", "cfg", "ini", "conf",
+    "md", "ipynb",
 ];
 
 /// Directory names to skip (matched as path components, not substrings)
@@ -109,6 +117,117 @@ fn should_scan_file(path: &Path) -> bool {
     }
     
     false
+}
+
+fn is_doc_like_file(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase()
+            .as_str(),
+        "md" | "ipynb"
+    )
+}
+
+const PUBLISHER_API_URL: &str = "https://api.ngc.nvidia.com/v2/search/catalog/resources/ENDPOINT?q=%7B%22filters%22%3A%5B%7B%22field%22%3A%22label%22%2C%22value%22%3A%22-blueprint%22%7D%5D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%22dateCreated%22%2C%22value%22%3A%22DESC%22%7D%5D%2C%22page%22%3A0%2C%22pageSize%22%3A1000%2C%22query%22%3A%22orgName%3A%5C%22qc69jvmznzxy%5C%22%22%2C%22scoredSize%22%3A1000%7D";
+
+static PUBLISHER_WHITELIST: Lazy<HashSet<String>> = Lazy::new(|| {
+    match fetch_publishers_from_api() {
+        Ok(set) if !set.is_empty() => {
+            info!("Loaded {} publishers from Build Page API", set.len());
+            set
+        }
+        Ok(_) => {
+            warn!("Build Page API returned no publishers, using fallback list");
+            default_publisher_whitelist()
+        }
+        Err(err) => {
+            warn!("Failed to load publishers from Build Page API: {}", err);
+            default_publisher_whitelist()
+        }
+    }
+});
+
+fn default_publisher_whitelist() -> HashSet<String> {
+    [
+        "nvidia",
+        "meta",
+        "mistralai",
+        "google",
+        "deepseek",
+        "stg",
+    ]
+    .into_iter()
+    .map(|v| v.to_string())
+    .collect()
+}
+
+fn fetch_publishers_from_api() -> anyhow::Result<HashSet<String>> {
+    let response = reqwest::blocking::get(PUBLISHER_API_URL)?
+        .error_for_status()?
+        .json::<Value>()?;
+
+    let mut publishers = HashSet::new();
+
+    let results = response
+        .get("results")
+        .and_then(|v| v.as_array())
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+
+    for group in results {
+        let resources = group
+            .get("resources")
+            .and_then(|v| v.as_array())
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+
+        for resource in resources {
+            let labels = resource
+                .get("labels")
+                .and_then(|v| v.as_array())
+                .map(|v| v.as_slice())
+                .unwrap_or(&[]);
+
+            for label in labels {
+                let key = label.get("key").and_then(|v| v.as_str()).unwrap_or("");
+                if key != "publisher" {
+                    continue;
+                }
+                if let Some(values) = label.get("values").and_then(|v| v.as_array()) {
+                    for value in values {
+                        if let Some(text) = value.as_str() {
+                            let normalized = text.trim().to_lowercase();
+                            if !normalized.is_empty() {
+                                publishers.insert(normalized);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(publishers)
+}
+
+fn model_is_whitelisted(model: &str) -> bool {
+    let prefix = model.split('/').next().unwrap_or("").trim().to_lowercase();
+    PUBLISHER_WHITELIST.contains(&prefix)
+}
+
+fn find_endpoint_in_context(lines: &[&str], current_line: usize, range: usize) -> Option<String> {
+    let start = current_line.saturating_sub(range);
+    let end = (current_line + range + 1).min(lines.len());
+    for i in start..end {
+        if let Some(line) = lines.get(i) {
+            if let Some(m) = HOSTED_ENDPOINT.find(line) {
+                return Some(m.as_str().to_string());
+            }
+        }
+    }
+    None
 }
 
 // ============================================================================
@@ -156,6 +275,24 @@ fn extract_local_nim(
     None
 }
 
+/// Find tag in surrounding lines (for YAML context)
+fn find_tag_in_context(lines: &[&str], current_line: usize, range: usize) -> Option<String> {
+    let tag_re = regex::Regex::new(r#"tag\s*[:=]\s*["']?([a-zA-Z0-9._-]+)["']?"#).ok()?;
+
+    let end = (current_line + range).min(lines.len());
+    for i in (current_line + 1)..end {
+        if let Some(line) = lines.get(i) {
+            if let Some(caps) = tag_re.captures(line) {
+                if let Some(tag) = caps.get(1) {
+                    return Some(tag.as_str().to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Extract Hosted NIM references from a line
 fn extract_hosted_nim(
     line: &str,
@@ -192,6 +329,16 @@ fn extract_hosted_nim(
             model_name = caps.get(1).map(|m| m.as_str().to_string());
         }
     }
+
+    if model_name.is_none() {
+        if let Some(caps) = BUILD_PAGE_URL.captures(line) {
+            let org = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let model = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            if !org.is_empty() && !model.is_empty() {
+                model_name = Some(format!("{}/{}", org, model));
+            }
+        }
+    }
     
     // If no explicit model name but we have an endpoint URL, try to extract model from URL path
     // e.g., https://ai.api.nvidia.com/v1/cv/baidu/paddleocr -> baidu/paddleocr
@@ -199,6 +346,12 @@ fn extract_hosted_nim(
     if model_name.is_none() {
         if let Some(ref url) = endpoint {
             model_name = extract_model_from_url(url);
+        }
+    }
+
+    if let Some(ref name) = model_name {
+        if !model_is_whitelisted(name) {
+            model_name = None;
         }
     }
     
@@ -286,6 +439,7 @@ pub fn scan_file(
     
     // Check if this is a YAML file (needs multi-line context)
     let is_yaml = relative_path.ends_with(".yml") || relative_path.ends_with(".yaml");
+    let is_doc_like = is_doc_like_file(path);
     
     // Open file and read all lines for context-aware scanning
     let content = match std::fs::read_to_string(path) {
@@ -303,22 +457,83 @@ pub fn scan_file(
         let line_number = line_num + 1; // 1-indexed
         
         // Extract Local NIM
-        if let Some(m) = extract_local_nim(line, line_number, &relative_path, repository) {
+        if let Some(mut m) = extract_local_nim(line, line_number, &relative_path, repository) {
+            if is_yaml && m.tag == "latest" {
+                if let Some(tag) = find_tag_in_context(&lines, line_num, 3) {
+                    m.tag = tag;
+                }
+            }
             debug!("Found Local NIM in {}:{}: {}", relative_path, line_number, m.image_url);
             local_matches.push(m);
         }
         
-        // Extract Hosted NIM with multi-line context for YAML files
-        let mut hosted = extract_hosted_nim(line, line_number, &relative_path, repository);
+        // Extract Hosted NIM
+        let mut hosted = if is_doc_like {
+            let mut matches = Vec::new();
+            let mut model_name: Option<String> = None;
+
+            if let Some(caps) = MODEL_ASSIGN.captures(line) {
+                model_name = caps.get(1).map(|m| m.as_str().to_string());
+            }
+            if model_name.is_none() {
+                if let Some(caps) = CHATNVIDIA.captures(line) {
+                    model_name = caps.get(1).map(|m| m.as_str().to_string());
+                }
+            }
+            if model_name.is_none() {
+                if let Some(caps) = NVIDIA_EMBEDDINGS.captures(line) {
+                    model_name = caps.get(1).map(|m| m.as_str().to_string());
+                }
+            }
+            if model_name.is_none() {
+                if let Some(caps) = NVIDIA_RERANK.captures(line) {
+                    model_name = caps.get(1).map(|m| m.as_str().to_string());
+                }
+            }
+            if model_name.is_none() {
+                if let Some(caps) = BUILD_PAGE_URL.captures(line) {
+                    let org = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                    let model = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                    if !org.is_empty() && !model.is_empty() {
+                        model_name = Some(format!("{}/{}", org, model));
+                    }
+                }
+            }
+
+            if let Some(ref name) = model_name {
+                if model_is_whitelisted(name) {
+                    let endpoint = find_endpoint_in_context(&lines, line_num, 10);
+                    matches.push(HostedNimMatch {
+                        repository: repository.to_string(),
+                        endpoint_url: endpoint,
+                        model_name,
+                        file_path: relative_path.clone(),
+                        line_number,
+                        match_context: line.trim().to_string(),
+                        function_id: None,
+                        status: None,
+                        container_image: None,
+                    });
+                }
+            }
+
+            matches
+        } else {
+            extract_hosted_nim(line, line_number, &relative_path, repository)
+        };
         
         // For YAML files, if we found an endpoint but no model_name, look in nearby lines
-        if is_yaml {
+        if is_yaml && !is_doc_like {
             for m in &mut hosted {
                 if m.model_name.is_none() && m.endpoint_url.is_some() {
                     // Look up to 10 lines before and after for model_name
                     m.model_name = find_model_name_in_context(&lines, line_num, 10);
-                    if m.model_name.is_some() {
-                        debug!("Found model_name from context: {:?}", m.model_name);
+                    if let Some(ref name) = m.model_name {
+                        if !model_is_whitelisted(name) {
+                            m.model_name = None;
+                        } else {
+                            debug!("Found model_name from context: {:?}", name);
+                        }
                     }
                 }
             }
