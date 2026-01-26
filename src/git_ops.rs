@@ -58,11 +58,15 @@ pub fn clone_repo(repo: &RepoConfig, workdir: &Path, github_token: Option<&str>)
     let dir_name = repo.name.replace('/', "_").replace('\\', "_");
     let target_dir = workdir.join(&dir_name);
     
-    // Remove existing directory if present
+    // Reuse existing directory if present
     if target_dir.exists() {
-        debug!("Removing existing directory: {}", target_dir.display());
-        std::fs::remove_dir_all(&target_dir)
-            .with_context(|| format!("Failed to remove existing directory: {}", target_dir.display()))?;
+        debug!("Reusing existing directory: {}", target_dir.display());
+        if let Err(e) = update_existing_repo(repo, &target_dir) {
+            warn!("Failed to update existing repo {}: {}", repo.name, e);
+            // Fall back to using the existing checkout to avoid blocking scans
+            return Ok(target_dir);
+        }
+        return Ok(target_dir);
     }
     
     info!("Cloning {} into {}", repo.name, target_dir.display());
@@ -101,6 +105,61 @@ pub fn clone_repo(repo: &RepoConfig, workdir: &Path, github_token: Option<&str>)
     
     info!("Successfully cloned {}", repo.name);
     Ok(target_dir)
+}
+
+/// Update an existing repository checkout
+fn update_existing_repo(repo: &RepoConfig, target_dir: &Path) -> Result<()> {
+    let branch = repo.branch();
+    let depth = repo.depth();
+
+    // Fetch latest changes (shallow fetch if depth provided)
+    let mut fetch_cmd = Command::new("git");
+    fetch_cmd
+        .arg("-C")
+        .arg(target_dir)
+        .arg("fetch")
+        .arg("origin")
+        .arg(branch);
+    if depth > 0 {
+        fetch_cmd.arg("--depth").arg(depth.to_string());
+    }
+    let fetch_output = fetch_cmd
+        .output()
+        .with_context(|| format!("Failed to fetch {}", repo.name))?;
+    if !fetch_output.status.success() {
+        let stderr = String::from_utf8_lossy(&fetch_output.stderr);
+        warn!("Git fetch failed for {}: {}", repo.name, stderr.trim());
+    }
+
+    // Ensure we are on the intended branch
+    let checkout_output = Command::new("git")
+        .arg("-C")
+        .arg(target_dir)
+        .arg("checkout")
+        .arg(branch)
+        .output()
+        .with_context(|| format!("Failed to checkout {} {}", repo.name, branch))?;
+    if !checkout_output.status.success() {
+        let stderr = String::from_utf8_lossy(&checkout_output.stderr);
+        warn!("Git checkout failed for {}: {}", repo.name, stderr.trim());
+    }
+
+    // Pull fast-forward only
+    let pull_output = Command::new("git")
+        .arg("-C")
+        .arg(target_dir)
+        .arg("pull")
+        .arg("--ff-only")
+        .arg("origin")
+        .arg(branch)
+        .output()
+        .with_context(|| format!("Failed to pull {}", repo.name))?;
+    if !pull_output.status.success() {
+        let stderr = String::from_utf8_lossy(&pull_output.stderr);
+        warn!("Git pull failed for {}: {}", repo.name, stderr.trim());
+    }
+
+    Ok(())
 }
 
 /// Clone all repositories in parallel

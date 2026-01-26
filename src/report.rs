@@ -2,6 +2,7 @@
 //!
 //! This module handles generating JSON and CSV reports from scan results.
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::fs::File;
 use std::io::Write;
@@ -31,6 +32,86 @@ pub fn generate_json_report(report: &ScanReport, output_path: &Path) -> Result<(
         .with_context(|| format!("Failed to write to file: {}", output_path.display()))?;
     
     info!("JSON report written to {}", output_path.display());
+    Ok(())
+}
+
+// ============================================================================
+// Aggregate Report Generation
+// ============================================================================
+
+#[derive(serde::Serialize)]
+struct RepoAggregate {
+    repository: String,
+    repository_url: String,
+    hosted_nims: Vec<String>,
+    local_nims: Vec<String>,
+}
+
+/// Generate an aggregate report grouped by repository
+pub fn generate_aggregate_report(report: &ScanReport, output_path: &Path) -> Result<()> {
+    info!("Generating aggregate report: {}", output_path.display());
+
+    let mut repo_map: HashMap<String, (HashSet<String>, HashSet<String>)> = HashMap::new();
+
+    for m in &report.source_code.local_nim {
+        let entry = repo_map
+            .entry(m.repository.clone())
+            .or_insert_with(|| (HashSet::new(), HashSet::new()));
+        entry.1.insert(format!("{}:{}", m.image_url, m.tag));
+    }
+    for m in &report.actions_workflow.local_nim {
+        let entry = repo_map
+            .entry(m.repository.clone())
+            .or_insert_with(|| (HashSet::new(), HashSet::new()));
+        entry.1.insert(format!("{}:{}", m.image_url, m.tag));
+    }
+
+    for m in &report.source_code.hosted_nim {
+        if let Some(name) = m.model_name.as_ref() {
+            let entry = repo_map
+                .entry(m.repository.clone())
+                .or_insert_with(|| (HashSet::new(), HashSet::new()));
+            entry.0.insert(name.clone());
+        }
+    }
+    for m in &report.actions_workflow.hosted_nim {
+        if let Some(name) = m.model_name.as_ref() {
+            let entry = repo_map
+                .entry(m.repository.clone())
+                .or_insert_with(|| (HashSet::new(), HashSet::new()));
+            entry.0.insert(name.clone());
+        }
+    }
+
+    let mut aggregates: Vec<RepoAggregate> = repo_map
+        .into_iter()
+        .map(|(repo, (models, images))| {
+            let mut hosted_nims: Vec<String> = models.into_iter().collect();
+            let mut local_nims: Vec<String> = images.into_iter().collect();
+            hosted_nims.sort();
+            local_nims.sort();
+
+            RepoAggregate {
+                repository: repo.clone(),
+                repository_url: format!("https://github.com/{}", repo),
+                hosted_nims,
+                local_nims,
+            }
+        })
+        .collect();
+
+    aggregates.sort_by(|a, b| a.repository.cmp(&b.repository));
+
+    let json = serde_json::to_string_pretty(&aggregates)
+        .context("Failed to serialize aggregate report to JSON")?;
+
+    let mut file = File::create(output_path)
+        .with_context(|| format!("Failed to create file: {}", output_path.display()))?;
+
+    file.write_all(json.as_bytes())
+        .with_context(|| format!("Failed to write to file: {}", output_path.display()))?;
+
+    info!("Aggregate report written to {}", output_path.display());
     Ok(())
 }
 

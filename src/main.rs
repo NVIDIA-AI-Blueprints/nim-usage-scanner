@@ -11,9 +11,10 @@ mod report;
 mod scanner;
 
 use std::path::PathBuf;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use log::{info, warn, error, LevelFilter};
+use std::process::Command;
 use tempfile::TempDir;
 
 use crate::models::ScanReport;
@@ -49,13 +50,13 @@ struct ScanArgs {
     #[arg(short, long, default_value = "./output")]
     output: PathBuf,
 
-    /// NGC API key for enrichment (required, or use NVIDIA_API_KEY env var)
-    #[arg(long, env = "NVIDIA_API_KEY", required = true)]
-    ngc_api_key: String,
+    /// NGC API key for enrichment (optional, or use NVIDIA_API_KEY env var)
+    #[arg(long, env = "NVIDIA_API_KEY")]
+    ngc_api_key: Option<String>,
 
-    /// GitHub token for cloning private repositories (required, or use GITHUB_TOKEN env var)
-    #[arg(long, env = "GITHUB_TOKEN", required = true)]
-    github_token: String,
+    /// GitHub token for cloning private repositories (optional, or use GITHUB_TOKEN env var)
+    #[arg(long, env = "GITHUB_TOKEN")]
+    github_token: Option<String>,
 
     /// Working directory for cloning repositories
     #[arg(short, long)]
@@ -72,6 +73,10 @@ struct ScanArgs {
     /// Maximum number of parallel jobs
     #[arg(short, long)]
     jobs: Option<usize>,
+
+    /// Regenerate repos.yaml from Build Page before scanning
+    #[arg(long, default_value = "false")]
+    refresh_repos: bool,
 }
 
 /// Arguments for the query subcommand
@@ -165,6 +170,19 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         info!("Using {} parallel jobs", jobs);
     }
     
+    if args.refresh_repos {
+        info!("Refreshing repos from Build Page...");
+        let status = Command::new("python3")
+            .arg("scripts/generate_repos_from_ngc.py")
+            .arg("--output")
+            .arg(&args.config)
+            .status()
+            .context("Failed to run Build Page repo generation script")?;
+        if !status.success() {
+            bail!("Build Page repo generation script failed");
+        }
+    }
+
     // Load and validate configuration
     info!("Loading configuration...");
     let config = config::load_config(&args.config)
@@ -200,9 +218,13 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     
     info!("Working directory: {}", workdir.display());
     
+    if args.github_token.is_none() {
+        warn!("No GitHub token provided; private repositories may fail to clone");
+    }
+
     // Clone repositories
     info!("Cloning repositories...");
-    let clone_results = git_ops::clone_all_repos(&repos, &workdir, Some(&args.github_token));
+    let clone_results = git_ops::clone_all_repos(&repos, &workdir, args.github_token.as_deref());
     
     let (success_count, failed_count) = git_ops::clone_stats(&clone_results);
     info!("Clone complete: {} succeeded, {} failed", success_count, failed_count);
@@ -248,7 +270,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     // Enrich with NGC API
     info!("Enriching findings with NGC API...");
     ngc_api::enrich_all_findings(
-        Some(&args.ngc_api_key),
+        args.ngc_api_key.as_deref(),
         &mut source_code,
         &mut actions_workflow,
     );
@@ -268,6 +290,11 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     // Generate CSV reports
     report::generate_csv_reports(&report, &args.output)
         .context("Failed to generate CSV reports")?;
+
+    // Generate aggregate report
+    let aggregate_path = args.output.join("report_aggregate.json");
+    report::generate_aggregate_report(&report, &aggregate_path)
+        .context("Failed to generate aggregate report")?;
     
     // Print summary
     report::print_summary(&report);
