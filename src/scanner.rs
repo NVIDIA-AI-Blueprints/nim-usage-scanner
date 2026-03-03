@@ -47,6 +47,13 @@ static MODEL_ASSIGN: Lazy<Regex> = Lazy::new(|| {
         .expect("Invalid MODEL_ASSIGN regex")
 });
 
+/// model_name field (e.g. in YAML/docs) - matches model_name: "xxx" or model_name = "xxx"
+/// Org is any word; whitelist is applied by model_is_whitelisted() (from NGC filters API).
+static MODEL_NAME_ASSIGN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"model_name\s*[=:]\s*["'](([a-zA-Z0-9_-]+)/[a-zA-Z0-9._-]+)["']"#)
+        .expect("Invalid MODEL_NAME_ASSIGN regex")
+});
+
 static CHATNVIDIA: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"ChatNVIDIA\s*\([^)]*model\s*=\s*["']([^"']+)["']"#)
         .expect("Invalid CHATNVIDIA regex")
@@ -61,6 +68,20 @@ static NVIDIA_EMBEDDINGS: Lazy<Regex> = Lazy::new(|| {
 static NVIDIA_RERANK: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"NVIDIARerank\s*\([^)]*model\s*=\s*["']([^"']+)["']"#)
         .expect("Invalid NVIDIA_RERANK regex")
+});
+
+/// Environment or config assignment - matches os.environ["KEY"] = "org/model" or key["..."] = "org/model"
+/// Org is any word; whitelist is applied by model_is_whitelisted() (from NGC filters API).
+static ENV_OR_CONFIG_MODEL: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"\]\s*=\s*\\?"(([a-zA-Z0-9_-]+)/[a-zA-Z0-9._-]+)\\?""#)
+        .expect("Invalid ENV_OR_CONFIG_MODEL regex")
+});
+
+/// Prose / doc text - matches org/model in natural language (e.g. "for nvidia/llama-3.2-nv-embedqa-1b-v2 model" or typo "v2model").
+/// Org is any word; whitelist is applied by model_is_whitelisted() (from NGC filters API).
+static DOC_PROSE_ORG_MODEL: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"\b(([a-zA-Z0-9_-]+)/[a-zA-Z0-9._-]+)(?:\s|$|[,)]|model\b)"#)
+        .expect("Invalid DOC_PROSE_ORG_MODEL regex")
 });
 
 // ============================================================================
@@ -130,20 +151,31 @@ fn is_doc_like_file(path: &Path) -> bool {
     )
 }
 
-const PUBLISHER_API_URL: &str = "https://api.ngc.nvidia.com/v2/search/catalog/resources/ENDPOINT?q=%7B%22filters%22%3A%5B%7B%22field%22%3A%22label%22%2C%22value%22%3A%22-blueprint%22%7D%5D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%22dateCreated%22%2C%22value%22%3A%22DESC%22%7D%5D%2C%22page%22%3A0%2C%22pageSize%22%3A1000%2C%22query%22%3A%22orgName%3A%5C%22qc69jvmznzxy%5C%22%22%2C%22scoredSize%22%3A1000%7D";
+// ---------------------------------------------------------------------------
+// Build API catalog (blueprints): used by scripts/generate_repos_from_ngc.py
+// for `--refresh-repos` (regenerate repos.yaml from Build Page). Do not use
+// for publisher whitelist; use PUBLISHER_FILTERS_API_URL below.
+// ---------------------------------------------------------------------------
+#[allow(dead_code)]
+const BUILD_CATALOG_RESOURCES_API_URL: &str = "https://api.ngc.nvidia.com/v2/search/catalog/resources/ENDPOINT";
+
+/// NGC catalog filters API: used only to fetch the publisher whitelist for Hosted NIM detection.
+/// Decoded query: {"filters":[],"orderBy":[{"field":"score","value":"DESC"}],"page":0,"pageSize":1000,"query":"orgName:\"qc69jvmznzxy\"","scoredSize":1000}
+/// Response is an array of { filterCategory, filterValues: [{ filterValue, displayName?, ... }] }; we use only filterValue for publisher (e.g. nvidia, meta, deepseek_ai).
+const PUBLISHER_FILTERS_API_URL: &str = "https://api.ngc.nvidia.com/v2/search/catalog/filters/ENDPOINT?q=%7B%22filters%22%3A%5B%5D%2C%22orderBy%22%3A%5B%7B%22field%22%3A%22score%22%2C%22value%22%3A%22DESC%22%7D%5D%2C%22page%22%3A0%2C%22pageSize%22%3A1000%2C%22query%22%3A%22orgName%3A%5C%22qc69jvmznzxy%5C%22%22%2C%22scoredSize%22%3A1000%7D";
 
 static PUBLISHER_WHITELIST: Lazy<HashSet<String>> = Lazy::new(|| {
-    match fetch_publishers_from_api() {
+    match fetch_publishers_from_filters_api() {
         Ok(set) if !set.is_empty() => {
-            info!("Loaded {} publishers from Build Page API", set.len());
+            info!("Loaded {} publishers from NGC catalog filters API", set.len());
             set
         }
         Ok(_) => {
-            warn!("Build Page API returned no publishers, using fallback list");
+            warn!("NGC filters API returned no publishers, using fallback list");
             default_publisher_whitelist()
         }
         Err(err) => {
-            warn!("Failed to load publishers from Build Page API: {}", err);
+            warn!("Failed to load publishers from NGC filters API: {}", err);
             default_publisher_whitelist()
         }
     }
@@ -163,55 +195,48 @@ fn default_publisher_whitelist() -> HashSet<String> {
     .collect()
 }
 
-fn fetch_publishers_from_api() -> anyhow::Result<HashSet<String>> {
-    let response = reqwest::blocking::get(PUBLISHER_API_URL)?
+/// Fetch publisher whitelist from NGC catalog filters API.
+/// We use only the **filterValue** field from each "filterValues" entry (not displayName).
+/// Values are stored in lowercase so that matching is **case-insensitive**.
+fn fetch_publishers_from_filters_api() -> anyhow::Result<HashSet<String>> {
+    let response = reqwest::blocking::get(PUBLISHER_FILTERS_API_URL)?
         .error_for_status()?
         .json::<Value>()?;
 
     let mut publishers = HashSet::new();
 
-    let results = response
-        .get("results")
-        .and_then(|v| v.as_array())
-        .map(|v| v.as_slice())
-        .unwrap_or(&[]);
+    let categories = response
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Filters API response is not an array"))?;
 
-    for group in results {
-        let resources = group
-            .get("resources")
+    for category in categories {
+        let filter_category = category
+            .get("filterCategory")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if filter_category != "publisher" {
+            continue;
+        }
+        let filter_values = category
+            .get("filterValues")
             .and_then(|v| v.as_array())
             .map(|v| v.as_slice())
             .unwrap_or(&[]);
-
-        for resource in resources {
-            let labels = resource
-                .get("labels")
-                .and_then(|v| v.as_array())
-                .map(|v| v.as_slice())
-                .unwrap_or(&[]);
-
-            for label in labels {
-                let key = label.get("key").and_then(|v| v.as_str()).unwrap_or("");
-                if key != "publisher" {
-                    continue;
-                }
-                if let Some(values) = label.get("values").and_then(|v| v.as_array()) {
-                    for value in values {
-                        if let Some(text) = value.as_str() {
-                            let normalized = text.trim().to_lowercase();
-                            if !normalized.is_empty() {
-                                publishers.insert(normalized);
-                            }
-                        }
-                    }
+        for fv in filter_values {
+            if let Some(filter_value) = fv.get("filterValue").and_then(|v| v.as_str()) {
+                let normalized = filter_value.trim().to_lowercase();
+                if !normalized.is_empty() {
+                    publishers.insert(normalized); // store lowercase for case-insensitive match
                 }
             }
         }
+        break;
     }
 
     Ok(publishers)
 }
 
+/// Check if the model's org (prefix before '/') is in the publisher whitelist. Comparison is case-insensitive.
 fn model_is_whitelisted(model: &str) -> bool {
     let prefix = model.split('/').next().unwrap_or("").trim().to_lowercase();
     PUBLISHER_WHITELIST.contains(&prefix)
@@ -311,7 +336,11 @@ fn extract_hosted_nim(
     if let Some(caps) = MODEL_ASSIGN.captures(line) {
         model_name = caps.get(1).map(|m| m.as_str().to_string());
     }
-    
+    if model_name.is_none() {
+        if let Some(caps) = MODEL_NAME_ASSIGN.captures(line) {
+            model_name = caps.get(1).map(|m| m.as_str().to_string());
+        }
+    }
     if model_name.is_none() {
         if let Some(caps) = CHATNVIDIA.captures(line) {
             model_name = caps.get(1).map(|m| m.as_str().to_string());
@@ -339,13 +368,40 @@ fn extract_hosted_nim(
             }
         }
     }
-    
+
+    if model_name.is_none() {
+        if let Some(caps) = ENV_OR_CONFIG_MODEL.captures(line) {
+            model_name = caps.get(1).map(|m| m.as_str().to_string());
+        }
+    }
     // If no explicit model name but we have an endpoint URL, try to extract model from URL path
-    // e.g., https://ai.api.nvidia.com/v1/cv/baidu/paddleocr -> baidu/paddleocr
-    // e.g., https://ai.api.nvidia.com/v1/cv/nvidia/nemoretriever-page-elements-v2 -> nvidia/nemoretriever-page-elements-v2
     if model_name.is_none() {
         if let Some(ref url) = endpoint {
             model_name = extract_model_from_url(url);
+        }
+    }
+    // Prose in docs/comments: "for nvidia/xxx model" or "nvidia/xxxmodel" (typo)
+    if model_name.is_none() {
+        for caps in DOC_PROSE_ORG_MODEL.captures_iter(line) {
+            if let Some(m) = caps.get(1) {
+                let mut name = m.as_str();
+                if name.ends_with("model") {
+                    name = name.strip_suffix("model").unwrap_or(name);
+                }
+                if !name.is_empty() && model_is_whitelisted(name) {
+                    matches.push(HostedNimMatch {
+                        repository: repository.to_string(),
+                        endpoint_url: endpoint.clone(),
+                        model_name: Some(name.to_string()),
+                        file_path: file_path.to_string(),
+                        line_number,
+                        match_context: line.trim().to_string(),
+                        function_id: None,
+                        status: None,
+                        container_image: None,
+                    });
+                }
+            }
         }
     }
 
@@ -355,8 +411,8 @@ fn extract_hosted_nim(
         }
     }
     
-    // Only create a match if we found something
-    if endpoint.is_some() || model_name.is_some() {
+    // Only create a match if we found something (and we didn't already push from DOC_PROSE)
+    if (endpoint.is_some() || model_name.is_some()) && (matches.is_empty() || model_name.is_some()) {
         matches.push(HostedNimMatch {
             repository: repository.to_string(),
             endpoint_url: endpoint,
@@ -476,6 +532,11 @@ pub fn scan_file(
                 model_name = caps.get(1).map(|m| m.as_str().to_string());
             }
             if model_name.is_none() {
+                if let Some(caps) = MODEL_NAME_ASSIGN.captures(line) {
+                    model_name = caps.get(1).map(|m| m.as_str().to_string());
+                }
+            }
+            if model_name.is_none() {
                 if let Some(caps) = CHATNVIDIA.captures(line) {
                     model_name = caps.get(1).map(|m| m.as_str().to_string());
                 }
@@ -496,6 +557,36 @@ pub fn scan_file(
                     let model = caps.get(2).map(|m| m.as_str()).unwrap_or("");
                     if !org.is_empty() && !model.is_empty() {
                         model_name = Some(format!("{}/{}", org, model));
+                    }
+                }
+            }
+            if model_name.is_none() {
+                if let Some(caps) = ENV_OR_CONFIG_MODEL.captures(line) {
+                    model_name = caps.get(1).map(|m| m.as_str().to_string());
+                }
+            }
+            // Fallback for prose in docs: "for nvidia/xxx model" or "nvidia/xxxmodel" (typo)
+            if model_name.is_none() {
+                for caps in DOC_PROSE_ORG_MODEL.captures_iter(line) {
+                    if let Some(m) = caps.get(1) {
+                        let mut name = m.as_str();
+                        if name.ends_with("model") {
+                            name = name.strip_suffix("model").unwrap_or(name);
+                        }
+                        if !name.is_empty() && model_is_whitelisted(name) {
+                            let endpoint = find_endpoint_in_context(&lines, line_num, 10);
+                            matches.push(HostedNimMatch {
+                                repository: repository.to_string(),
+                                endpoint_url: endpoint,
+                                model_name: Some(name.to_string()),
+                                file_path: relative_path.clone(),
+                                line_number,
+                                match_context: line.trim().to_string(),
+                                function_id: None,
+                                status: None,
+                                container_image: None,
+                            });
+                        }
                     }
                 }
             }
@@ -684,11 +775,12 @@ pub fn deduplicate_results(findings: &mut NimFindings) {
         seen.insert(key)
     });
     
-    // Deduplicate hosted_nim
-    seen.clear();
+    // Deduplicate hosted_nim (key must include model_name so multiple models on the same line are all kept)
+    let mut seen_hosted: HashSet<(String, String, usize, String)> = HashSet::new();
     findings.hosted_nim.retain(|m| {
-        let key = (m.repository.clone(), m.file_path.clone(), m.line_number);
-        seen.insert(key)
+        let model_key = m.model_name.as_deref().unwrap_or("").to_string();
+        let key = (m.repository.clone(), m.file_path.clone(), m.line_number, model_key);
+        seen_hosted.insert(key)
     });
 }
 
@@ -763,6 +855,42 @@ mod tests {
         
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].model_name.as_deref(), Some("nvidia/llama-3.1-nemotron"));
+    }
+
+    #[test]
+    fn test_extract_hosted_nim_doc_prose() {
+        let line = "for nvidia/llama-3.2-nv-embedqa-1b-v2 model the Llama 3.2 Community License";
+        let result = extract_hosted_nim(line, 1, "deploy/README.md", "test/repo");
+        assert!(!result.is_empty());
+        assert_eq!(result[0].model_name.as_deref(), Some("nvidia/llama-3.2-nv-embedqa-1b-v2"));
+
+        let line2 = "nvidia/llama-3.2-nv-embedqa-1b-v2model the Llama"; // typo: v2model
+        let result2 = extract_hosted_nim(line2, 1, "README.md", "test/repo");
+        assert!(!result2.is_empty());
+        assert_eq!(result2[0].model_name.as_deref(), Some("nvidia/llama-3.2-nv-embedqa-1b-v2"));
+    }
+
+    #[test]
+    fn test_extract_hosted_nim_model_name_assign() {
+        let line = r#"      model_name: "nvidia/llama-3.2-nv-embedqa-1b-v2"#;
+        let result = extract_hosted_nim(line, 1, "docs/03-configuration.md", "test/data-flywheel");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].model_name.as_deref(), Some("nvidia/llama-3.2-nv-embedqa-1b-v2"));
+    }
+
+    #[test]
+    fn test_extract_hosted_nim_env_or_config_model() {
+        // As in .ipynb JSON: os.environ["APP_EMBEDDINGS_MODELNAME"] = \"nvidia/llama-3.2-nv-embedqa-1b-v2\"
+        let line = r#"    "os.environ[\"APP_EMBEDDINGS_MODELNAME\"] = \"nvidia/llama-3.2-nv-embedqa-1b-v2\"\n","#;
+        let result = extract_hosted_nim(line, 1, "notebooks/get_started_nvidia_api.ipynb", "test/aiq");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].model_name.as_deref(), Some("nvidia/llama-3.2-nv-embedqa-1b-v2"));
+
+        // Normal Python: ] = "nvidia/..."
+        let line2 = r#"os.environ["APP_EMBEDDINGS_MODELNAME"] = "nvidia/llama-3.2-nv-embedqa-1b-v2""#;
+        let result2 = extract_hosted_nim(line2, 1, "config.py", "test/repo");
+        assert_eq!(result2.len(), 1);
+        assert_eq!(result2[0].model_name.as_deref(), Some("nvidia/llama-3.2-nv-embedqa-1b-v2"));
     }
 
     #[test]
