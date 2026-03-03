@@ -12,6 +12,8 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
+# Build API catalog: list blueprints (ENDPOINT resources). Used for --refresh-repos to regenerate repos.yaml.
+# For publisher whitelist (scanner detection), the Rust scanner uses /v2/search/catalog/filters/ENDPOINT instead.
 NGC_SEARCH_ENDPOINT = "https://api.ngc.nvidia.com/v2/search/catalog/resources/ENDPOINT"
 NGC_ENDPOINT_SPEC_BASE = "https://api.ngc.nvidia.com/v2/endpoints"
 

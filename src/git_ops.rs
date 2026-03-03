@@ -58,7 +58,7 @@ pub fn clone_repo(repo: &RepoConfig, workdir: &Path, github_token: Option<&str>)
     let dir_name = repo.name.replace('/', "_").replace('\\', "_");
     let target_dir = workdir.join(&dir_name);
     
-    // Reuse existing directory if present
+    // Reuse existing directory if present (e.g. second run with same --workdir and --keep-repos)
     if target_dir.exists() {
         debug!("Reusing existing directory: {}", target_dir.display());
         if let Err(e) = update_existing_repo(repo, &target_dir) {

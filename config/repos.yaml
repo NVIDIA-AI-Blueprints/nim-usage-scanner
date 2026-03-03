@@ -10,15 +10,33 @@ defaults:
 
 # List of repositories to scan
 repos:
-  # Add more repositories here...
-  # - name: org/repo-name
-  #   url: https://github.com/org/repo-name.git
-  #   branch: develop  # optional, overrides default
-  #   depth: 5         # optional, overrides default
-  #   enabled: false   # optional, skip this repo
+  - name: NVIDIA-AI-Blueprints/Financial-Fraud-Detection
+    url: https://github.com/NVIDIA-AI-Blueprints/Financial-Fraud-Detection.git
+    branch: main
+    enabled: true
 
-  - name: NVIDIA-AI-Blueprints/streaming-data-to-rag
-    url: https://github.com/NVIDIA-AI-Blueprints/streaming-data-to-rag.git
+  - name: NVIDIA-AI-Blueprints/Multi-Agent-Intelligent-Warehouse
+    url: https://github.com/NVIDIA-AI-Blueprints/Multi-Agent-Intelligent-Warehouse.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/Retail-Catalog-Enrichment
+    url: https://github.com/NVIDIA-AI-Blueprints/Retail-Catalog-Enrichment.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/ai-model-distillation-for-financial-data
+    url: https://github.com/NVIDIA-AI-Blueprints/ai-model-distillation-for-financial-data.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/ai-virtual-assistant
+    url: https://github.com/NVIDIA-AI-Blueprints/ai-virtual-assistant.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/aiq-research-assistant
+    url: https://github.com/NVIDIA-AI-Blueprints/aiq-research-assistant.git
     branch: main
     enabled: true
 
@@ -32,7 +50,142 @@ repos:
     branch: main
     enabled: true
 
+  - name: NVIDIA-AI-Blueprints/bring-llms-to-nim
+    url: https://github.com/NVIDIA-AI-Blueprints/bring-llms-to-nim.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/data-flywheel
+    url: https://github.com/NVIDIA-AI-Blueprints/data-flywheel.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/genomics-analysis
+    url: https://github.com/NVIDIA-AI-Blueprints/genomics-analysis.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/llm-router
+    url: https://github.com/NVIDIA-AI-Blueprints/llm-router.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/pdf-to-podcast
+    url: https://github.com/NVIDIA-AI-Blueprints/pdf-to-podcast.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/quantitative-portfolio-optimization
+    url: https://github.com/NVIDIA-AI-Blueprints/quantitative-portfolio-optimization.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/rag
+    url: https://github.com/NVIDIA-AI-Blueprints/rag.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/retail-shopping-assistant
+    url: https://github.com/NVIDIA-AI-Blueprints/retail-shopping-assistant.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/safety-for-agentic-ai
+    url: https://github.com/NVIDIA-AI-Blueprints/safety-for-agentic-ai.git
+    branch: main
+    enabled: true
+
   - name: NVIDIA-AI-Blueprints/single-cell-analysis-blueprint
     url: https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/streaming-data-to-rag
+    url: https://github.com/NVIDIA-AI-Blueprints/streaming-data-to-rag.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/video-search-and-summarization
+    url: https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/vulnerability-analysis
+    url: https://github.com/NVIDIA-AI-Blueprints/vulnerability-analysis.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-BioNeMo-blueprints/generative-protein-binder-design
+    url: https://github.com/NVIDIA-BioNeMo-blueprints/generative-protein-binder-design.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-NIM-Agent-Blueprints/generative-virtual-screening
+    url: https://github.com/NVIDIA-NIM-Agent-Blueprints/generative-virtual-screening.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-Omniverse-blueprints/cosmos-dataset-search
+    url: https://github.com/NVIDIA-Omniverse-blueprints/cosmos-dataset-search.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation
+    url: https://github.com/NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-Omniverse-blueprints/earth2-weather-analytics
+    url: https://github.com/NVIDIA-Omniverse-blueprints/earth2-weather-analytics.git
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-Omniverse-blueprints/synthetic-motion-generation
+    url: https://github.com/NVIDIA-Omniverse-blueprints/synthetic-motion-generation.git
+    branch: main
+    enabled: true
+
+  - name: bubbleran/Telco-Network-Configuration
+    url: https://github.com/bubbleran/Telco-Network-Configuration.git
+    branch: main
+    enabled: true
+
+  - name: crewAIInc/nvidia-demo
+    url: https://github.com/crewAIInc/nvidia-demo.git
+    branch: main
+    enabled: true
+
+  - name: cyborginc/rag
+    url: https://github.com/cyborginc/rag.git
+    branch: main
+    enabled: true
+
+  - name: daily-co/nimble-pipecat
+    url: https://github.com/daily-co/nimble-pipecat.git
+    branch: main
+    enabled: true
+
+  - name: h2oai/h2oai-flood-intelligence-agent
+    url: https://github.com/h2oai/h2oai-flood-intelligence-agent.git
+    branch: main
+    enabled: true
+
+  - name: langchain-ai/langchain-nvidia
+    url: https://github.com/langchain-ai/langchain-nvidia.git
+    branch: main
+    enabled: true
+
+  - name: mlrun/nvidia-data-flywheel
+    url: https://github.com/mlrun/nvidia-data-flywheel.git
+    branch: main
+    enabled: true
+
+  - name: wandb/ai-virtual-assistant
+    url: https://github.com/wandb/ai-virtual-assistant.git
+    branch: main
+    enabled: true
+
+  - name: wandb/data-flywheel-nvidia
+    url: https://github.com/wandb/data-flywheel-nvidia.git
     branch: main
     enabled: true

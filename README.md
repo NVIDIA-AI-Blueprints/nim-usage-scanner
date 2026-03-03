@@ -44,8 +44,10 @@ export GITHUB_TOKEN="ghp_xxx"
 # Regenerate repos.yaml from Build Page before scanning
 ./target/release/nim-usage-scanner scan -c config/repos.yaml --refresh-repos
 
-# Keep cloned repos and reuse on next run (auto pull latest)
-./target/release/nim-usage-scanner scan -c config/repos.yaml --refresh-repos --workdir /tmp/blueprint-scan --keep-repos --jobs 4
+# Use a persistent workdir and keep repos after scan (recommended for repeated runs)
+# First run: clones into /tmp/blueprint-scan. Second and later runs: reuses existing dirs and pulls latest (no full clone).
+./target/release/nim-usage-scanner scan -c config/repos.yaml --workdir /tmp/blueprint-scan --keep-repos --jobs 4
+# Add --refresh-repos only when you want to regenerate repos.yaml from Build Page before scanning
 
 # Output will be in ./output/report.json, ./output/report.csv, and ./output/report_aggregate.json
 ```
@@ -78,16 +80,17 @@ defaults:
 repos:
   - name: NVIDIA/GenerativeAIExamples
     url: https://github.com/NVIDIA/GenerativeAIExamples.git
-    
+
   - name: my-org/my-private-repo
     url: https://github.com/my-org/my-private-repo.git
     branch: develop
+    enabled: true   # optional, defaults to true; set false to skip
 ```
 
 ### Generate repos.yaml from Build Blueprints (optional)
 
-You can generate `config/repos.yaml` directly from the Buil API
-and each endpoint's spec ("View GitHub" link):
+You can generate `config/repos.yaml` directly from the Build API
+and each endpoint's spec ("View GitHub" link). This uses the **NGC catalog resources API** (`/v2/search/catalog/resources/ENDPOINT`) to list blueprints.
 
 ```bash
 python scripts/generate_repos_from_ngc.py
@@ -105,13 +108,17 @@ Optional flags:
 ### `scan` - Scan Repositories
 
 ```bash
-nim-usage-scanner scan [OPTIONS] --config <CONFIG> [--ngc-api-key <KEY>] [--github-token <TOKEN>]
+nim-usage-scanner scan [OPTIONS] -c <CONFIG> [--ngc-api-key <KEY>] [--github-token <TOKEN>]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `-c, --config` | Path to repos.yaml (required) |
 | `-o, --output` | Output directory (default: `./output`) |
+| `-w, --workdir` | Working directory for cloning repos (optional; uses temp dir if omitted) |
+| `--keep-repos` | Keep cloned repositories after scanning; with `--workdir`, next run reuses and pulls instead of cloning (default: false) |
+| `-j, --jobs` | Maximum number of parallel jobs (optional) |
+| `--refresh-repos` | Regenerate repos.yaml from Build Page before scanning (default: false) |
 | `--ngc-api-key` | NVIDIA API Key (or use `NVIDIA_API_KEY` env var, optional) |
 | `--github-token` | GitHub Token (or use `GITHUB_TOKEN` env var, optional) |
 | `-v, --verbose` | Increase logging verbosity |
@@ -186,26 +193,29 @@ Local NIMs are detected by scanning file contents for Docker image references:
 Additional behavior:
 
 - **YAML tag context**: In `.yaml`/`.yml`, if an image is found with `latest`, the scanner looks up to 3 lines ahead for a `tag:` field and uses it when present.
-- **File types**: The scanner checks common source and config formats, including `yaml/yml`, `json`, `toml`, `env`, `Dockerfile`, `md`, and `ipynb`.
+- **File types**: The scanner checks common source and config formats: `py`, `yaml`/`yml`, `json`, `toml`, `env`, `Dockerfile` (or any filename starting with `Dockerfile`), `md`, `ipynb`, `sh`, `bash`, `js`, `ts`, `jsx`, `tsx`, `cfg`, `ini`, `conf`.
 
 ### Hosted NIM (API Endpoints + Model Names)
 
 Hosted NIMs are detected by scanning for:
 
 - **API endpoints** matching `https://{integrate|ai|build}.api.nvidia.com/...`
-- **Model fields** such as `model = "org/name"` or `model: "org/name"`
+- **Model fields** such as `model = "org/name"`, `model: "org/name"`, or `model_name: "org/name"` (e.g. in YAML/docs)
 - **Known client patterns** like `ChatNVIDIA(...)`, `NVIDIAEmbeddings(...)`, `NVIDIARerank(...)`
+- **Environment or config assignments** such as `os.environ["APP_EMBEDDINGS_MODELNAME"] = "org/model"` (e.g. in notebooks)
 - **Build Page links** like `https://build.nvidia.com/org/model`
+- **Prose in docs** such as `for nvidia/llama-3.2-nv-embedqa-1b-v2 model` or typo `nvidia/llama-3.2-nv-embedqa-1b-v2model` (org must be in the runtime publisher whitelist)
 
-Model-name extraction:
+For all of the above, the **org** in `org/model` can be any publisher name; only those in the **runtime publisher whitelist** (from the NGC filters API) are counted as Hosted NIM.
 
-- If a model name is not present on a line but an endpoint is, the scanner may try to extract `org/model` from the URL path.
+- In source/config files (e.g. .py, .yaml), if a model name is not present on a line but an endpoint URL is, the scanner may try to extract `org/model` from the URL path.
 - For YAML files, if an endpoint is found without a model name, the scanner searches up to 10 lines around it for a `model` or `model_name` field.
 
 Publisher whitelist:
 
 - The model prefix (`org` in `org/model`) must be in a **publisher whitelist** to be counted.
-- The whitelist is fetched at runtime from the Build Page API and falls back to a built-in list if the API is unavailable.
+- The whitelist is fetched at runtime from the **NGC catalog filters API** (`/v2/search/catalog/filters/ENDPOINT`), which is separate from the **resources API** (`/v2/search/catalog/resources/ENDPOINT`) used for listing blueprints (e.g. `--refresh-repos`). From the filters response we use only the **filterValue** field from the `filterCategory: "publisher"` entries. The API may return publishers such as nvidia, meta, mistralai, microsoft, google, qwen, deepseek_ai. If the API is unavailable or returns no publishers, a **built-in fallback** list is used (nvidia, meta, mistralai, google, deepseek, stg).
+- **Matching is case-insensitive**: values are stored and compared in lowercase.
 - This whitelist applies to **all file types**, including `md` and `ipynb`.
 
 ## Output Formats
@@ -246,8 +256,8 @@ source_code,hosted_nim,NVIDIA/Example,src/main.py,42,,,,https://ai.api.nvidia.co
 
 | Variable | Description |
 |----------|-------------|
-| `NVIDIA_API_KEY` | NGC API Key (required) |
-| `GITHUB_TOKEN` | GitHub Token (required for scan) |
+| `NVIDIA_API_KEY` | NGC API Key (optional; used for tag resolution and query enrichment) |
+| `GITHUB_TOKEN` | GitHub Token (optional; required only for cloning private repositories) |
 | `RUST_LOG` | Log level: `debug`, `info`, `warn`, `error` |
 
 ## License
