@@ -90,7 +90,7 @@ repos:
 ### Generate repos.yaml from Build Blueprints (optional)
 
 You can generate `config/repos.yaml` directly from the Build API
-and each endpoint's spec ("View GitHub" link). This uses the **NGC catalog resources API** (`/v2/search/catalog/resources/ENDPOINT`) to list blueprints.
+and each endpoint's spec ("View GitHub" link). This uses the **NGC catalog resources API** (`/v2/search/catalog/resources/BLUEPRINT` with `query` and `pageSize`) to list all blueprints in one request, then `/v2/blueprints/{orgName}/{name}/spec` for each spec.
 
 ```bash
 python scripts/generate_repos_from_ngc.py
@@ -214,7 +214,7 @@ For all of the above, the **org** in `org/model` can be any publisher name; only
 Publisher whitelist:
 
 - The model prefix (`org` in `org/model`) must be in a **publisher whitelist** to be counted.
-- The whitelist is fetched at runtime from the **NGC catalog filters API** (`/v2/search/catalog/filters/ENDPOINT`), which is separate from the **resources API** (`/v2/search/catalog/resources/ENDPOINT`) used for listing blueprints (e.g. `--refresh-repos`). From the filters response we use only the **filterValue** field from the `filterCategory: "publisher"` entries. The API may return publishers such as nvidia, meta, mistralai, microsoft, google, qwen, deepseek_ai. If the API is unavailable or returns no publishers, a **built-in fallback** list is used (nvidia, meta, mistralai, google, deepseek, stg).
+- The whitelist is fetched at runtime from the **NGC catalog filters API** (`/v2/search/catalog/filters/ENDPOINT`), which is separate from the **catalog resources API** (`/v2/search/catalog/resources/BLUEPRINT`) used for listing blueprints (e.g. `--refresh-repos`). From the filters response we use only the **filterValue** field from the `filterCategory: "publisher"` entries. The API may return publishers such as nvidia, meta, mistralai, microsoft, google, qwen, deepseek_ai. If the API is unavailable or returns no publishers, a **built-in fallback** list is used (nvidia, meta, mistralai, google, deepseek, stg).
 - **Matching is case-insensitive**: values are stored and compared in lowercase.
 - This whitelist applies to **all file types**, including `md` and `ipynb`.
 
