@@ -12,10 +12,10 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 
-# Build API catalog: list blueprints (ENDPOINT resources). Used for --refresh-repos to regenerate repos.yaml.
-# For publisher whitelist (scanner detection), the Rust scanner uses /v2/search/catalog/filters/ENDPOINT instead.
-NGC_SEARCH_ENDPOINT = "https://api.ngc.nvidia.com/v2/search/catalog/resources/ENDPOINT"
-NGC_ENDPOINT_SPEC_BASE = "https://api.ngc.nvidia.com/v2/endpoints"
+# List all blueprints: /v2/search/catalog/resources/BLUEPRINT with query "" and pageSize 1000 (returns all in one response).
+NGC_BLUEPRINT_LIST_URL = "https://api.ngc.nvidia.com/v2/search/catalog/resources/BLUEPRINT"
+# Spec URL pattern: https://api.ngc.nvidia.com/v2/blueprints/{orgName}/{name}/spec
+NGC_BLUEPRINTS_SPEC_URL_TEMPLATE = "https://api.ngc.nvidia.com/v2/blueprints/{org_name}/{name}/spec"
 
 
 def fetch_json(url: str) -> dict:
@@ -25,18 +25,10 @@ def fetch_json(url: str) -> dict:
     return json.loads(data)
 
 
-def build_ngc_query(org_name: str, label: str, page: int, page_size: int) -> str:
-    payload = {
-        "filters": [
-            {"field": "label", "value": label},
-        ],
-        "orderBy": [{"field": "dateCreated", "value": "DESC"}],
-        "page": page,
-        "pageSize": page_size,
-        "query": f'orgName:"{org_name}"',
-        "scoredSize": page_size,
-    }
-    return f"{NGC_SEARCH_ENDPOINT}?q={quote(json.dumps(payload))}"
+def build_blueprint_list_url(page_size: int = 1000) -> str:
+    """Build URL for resources/BLUEPRINT list API; returns all blueprints in one response."""
+    payload = {"query": "", "pageSize": page_size}
+    return f"{NGC_BLUEPRINT_LIST_URL}?q={quote(json.dumps(payload))}"
 
 
 def find_github_url(payload: object) -> str | None:
@@ -158,81 +150,75 @@ def fetch_blueprint_repos(
     dict[str, list[str]],
     int,
 ]:
-    repos: list[str] = []
-    missing_github: list[str] = []
+    """List all blueprints via /v2/search/catalog/resources/BLUEPRINT, then fetch each spec from /v2/blueprints/{orgName}/{name}/spec."""
+    url = build_blueprint_list_url(page_size)
+    data = fetch_json(url)
+
+    total = data.get("resultTotal")
+    if isinstance(total, int):
+        print(f"[Build Page] Total blueprints: {total}")
+
+    resources: list[dict] = []
+    for group in data.get("results", []):
+        resources.extend(group.get("resources", []) or [])
+
+    seen_items: set[tuple[str, str]] = set()
+    items: list[tuple[str, str]] = []
+    for res in resources:
+        org = res.get("orgName") or ""
+        name = res.get("name") or ""
+        if not name:
+            rid = res.get("resourceId") or ""
+            if "/" in rid:
+                org, _, name = rid.partition("/")
+            else:
+                continue
+        if org_name and org != org_name:
+            continue
+        key = (org, name)
+        if key in seen_items:
+            continue
+        seen_items.add(key)
+        items.append(key)
+
+    repos = []
+    missing_github = []
     invalid_github: list[tuple[str, str]] = []
     repo_to_resources: dict[str, list[str]] = {}
-    total_resources = 0
-    seen_resource_ids: set[str] = set()
-    page = 0
-    total_expected: int | None = None
 
-    while True:
-        url = build_ngc_query(org_name, label, page, page_size)
-        data = fetch_json(url)
+    def fetch_spec(item: tuple[str, str]) -> tuple[str, dict] | tuple[str, None]:
+        org, name = item
+        resource_id = f"{org}/{name}"
+        spec_url = NGC_BLUEPRINTS_SPEC_URL_TEMPLATE.format(org_name=org, name=name)
+        try:
+            return resource_id, fetch_json(spec_url)
+        except Exception as exc:
+            print(f"[Build Page] Failed to fetch spec for {resource_id}: {exc}")
+            return resource_id, None
 
-        if total_expected is None:
-            total_expected = data.get("resultTotal")
-            if isinstance(total_expected, int):
-                print(f"[Build Page] Total blueprints: {total_expected}")
-
-        groups = data.get("results", [])
-        resources: list[dict] = []
-        for group in groups:
-            resources.extend(group.get("resources", []) or [])
-
-        if not resources:
-            break
-
-        resource_ids: list[str] = []
-        for resource in resources:
-            resource_id = resource.get("resourceId")
-            name = resource.get("name")
-            if not resource_id or not name:
-                continue
-            if resource_id in seen_resource_ids:
-                continue
-            seen_resource_ids.add(resource_id)
-            total_resources += 1
-            resource_ids.append(resource_id)
-
-        def fetch_spec(resource_id: str) -> tuple[str, dict] | tuple[str, None]:
-            spec_url = f"{NGC_ENDPOINT_SPEC_BASE}/{resource_id}/spec"
-            try:
-                return resource_id, fetch_json(spec_url)
-            except Exception as exc:
-                print(f"[Build Page] Failed to fetch spec for {resource_id}: {exc}")
-                return resource_id, None
-
-        if resource_ids:
-            with ThreadPoolExecutor(max_workers=workers) as executor:
-                futures = [executor.submit(fetch_spec, rid) for rid in resource_ids]
-                for future in as_completed(futures):
-                    resource_id, spec = future.result()
-                    if not spec:
-                        continue
-                    github_url = find_github_url(spec)
-                    if not github_url:
-                        missing_github.append(resource_id)
-                        continue
-                    repo_name = repo_name_from_github_url(github_url)
-                    if not repo_name:
-                        invalid_github.append((resource_id, github_url))
-                        continue
-                    repos.append(repo_name)
-                    repo_to_resources.setdefault(repo_name, []).append(resource_id)
-
-        if total_expected is not None and (page + 1) * page_size >= total_expected:
-            break
-
-        page += 1
+    if items:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for future in as_completed([executor.submit(fetch_spec, item) for item in items]):
+                resource_id, spec = future.result()
+                if not spec:
+                    continue
+                github_url = find_github_url(spec)
+                if not github_url:
+                    missing_github.append(resource_id)
+                    continue
+                repo_name = repo_name_from_github_url(github_url)
+                if not repo_name:
+                    invalid_github.append((resource_id, github_url))
+                    continue
+                repos.append(repo_name)
+                repo_to_resources.setdefault(repo_name, []).append(resource_id)
 
     return (
         sorted(set(repos)),
         sorted(set(missing_github)),
         invalid_github,
         repo_to_resources,
-        total_resources,
+        len(items),
     )
 
 
@@ -281,7 +267,7 @@ def parse_args() -> argparse.Namespace:
         default="qc69jvmznzxy",
         help="NGC org name (default: qc69jvmznzxy)",
     )
-    parser.add_argument("--label", default="blueprint", help="NGC label filter")
+    parser.add_argument("--label", default="blueprint", help="(Unused with v2/blueprints API; kept for CLI compatibility)")
     parser.add_argument("--page-size", type=int, default=1000, help="NGC page size")
     parser.add_argument("--workers", type=int, default=8, help="Spec fetch workers")
     parser.add_argument("--branch", default="main", help="Default branch")
@@ -322,17 +308,18 @@ def main() -> None:
             print(f"  - {resource_id}: {url}")
     duplicates = {k: v for k, v in repo_to_resources.items() if len(v) > 1}
     if duplicates:
-        print("[Build Page] Multiple blueprints mapped to same repo:")
+        print("[Build Page] Repos with multiple NGC blueprint IDs (one entry per repo in repos.yaml):")
         for repo, resources in sorted(duplicates.items()):
             print(f"  - {repo}")
             for resource_id in resources:
                 print(f"    * {resource_id}")
 
+    # Blueprint IDs that share a repo already listed (no extra line in repos.yaml)
     not_written = set(missing)
     for resources in duplicates.values():
         not_written.update(resources[1:])
     if not_written:
-        print("[Build Page] Blueprints not written to repos.yaml:")
+        print("[Build Page] Blueprint IDs not given a separate entry (repo already in repos.yaml):")
         for resource_id in sorted(not_written):
             print(f"  - {resource_id}")
 

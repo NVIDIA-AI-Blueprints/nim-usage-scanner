@@ -70,6 +70,11 @@ repos:
     branch: main
     enabled: true
 
+  - name: NVIDIA-AI-Blueprints/nemotron-voice-agent
+    url: https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
+    branch: main
+    enabled: true
+
   - name: NVIDIA-AI-Blueprints/pdf-to-podcast
     url: https://github.com/NVIDIA-AI-Blueprints/pdf-to-podcast.git
     branch: main
@@ -142,6 +147,11 @@ repos:
 
   - name: NVIDIA-Omniverse-blueprints/synthetic-motion-generation
     url: https://github.com/NVIDIA-Omniverse-blueprints/synthetic-motion-generation.git
+    branch: main
+    enabled: true
+
+  - name: VIAVI-CTOO/es-blueprint-rsg
+    url: https://github.com/VIAVI-CTOO/es-blueprint-rsg.git
     branch: main
     enabled: true
 
