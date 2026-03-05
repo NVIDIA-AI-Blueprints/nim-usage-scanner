@@ -1,0 +1,15 @@
+# Optional: add repos to scan in addition to Build blueprints.
+# Copy to repos.githubonly.yaml in the same directory as repos.yaml.
+# When you run: ./target/release/nim-usage-scanner scan -c config/repos.yaml --refresh-repos
+# the scanner will merge repos from this file into repos.yaml (by name; no duplicates).
+#
+# Same format as repos.yaml:
+version: "1.0"
+defaults:
+  branch: main
+  depth: 1
+repos:
+  # - name: my-org/my-custom-repo
+  #   url: https://github.com/my-org/my-custom-repo.git
+  #   branch: main
+  #   enabled: true

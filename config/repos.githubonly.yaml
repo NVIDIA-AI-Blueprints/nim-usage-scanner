@@ -1,0 +1,25 @@
+# List the blueprints that only exist on GitHub while the Build API does not have them.
+version: "1.0"
+defaults:
+  branch: main
+  depth: 1
+repos:
+  - name: NVIDIA-AI-Blueprints/3d-object-generation
+    url: https://github.com/NVIDIA-AI-Blueprints/3d-object-generation
+    branch: main
+    enabled: true
+
+  - name: NVIDIA-AI-Blueprints/3d-guided-genai-rtx
+    url: https://github.com/NVIDIA-AI-Blueprints/3d-guided-genai-rtx
+    branch: main
+    enabled: true
+
+  - name: NVIDIA/data-enrichment-workflow
+    url: https://github.com/NVIDIA/data-enrichment-workflow
+    branch: main
+    enabled: true
+
+  - name: NVIDIA/metropolis-sdg-smart-cities
+    url: https://github.com/NVIDIA/metropolis-sdg-smart-cities
+    branch: main
+    enabled: true

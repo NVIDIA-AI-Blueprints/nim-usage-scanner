@@ -24,7 +24,7 @@ pub enum SourceType {
 // ============================================================================
 
 /// Top-level configuration structure parsed from repos.yaml
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Configuration file version (reserved for future compatibility checks)
     #[allow(dead_code)]
@@ -37,7 +37,7 @@ pub struct Config {
 }
 
 /// Default configuration values
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Defaults {
     /// Default branch to clone
     #[serde(default = "default_branch")]
@@ -56,7 +56,7 @@ fn default_depth() -> u32 {
 }
 
 /// Configuration for a single repository
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepoConfig {
     /// Repository identifier name (used in reports)
     pub name: String,

@@ -181,6 +181,8 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         if !status.success() {
             bail!("Build Page repo generation script failed");
         }
+        config::merge_extra_repos(&args.config)
+            .context("Failed to merge extra repos from repos.githubonly.yaml")?;
     }
 
     // Load and validate configuration

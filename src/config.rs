@@ -2,9 +2,13 @@
 //!
 //! This module handles loading and validating the repos.yaml configuration file.
 
+use std::collections::HashSet;
 use std::path::Path;
 use anyhow::{Context, Result, bail};
 use crate::models::{Config, RepoConfig};
+
+/// Filename for optional extra repos merged when using `--refresh-repos`.
+pub const EXTRA_REPOS_FILENAME: &str = "repos.githubonly.yaml";
 
 /// Load configuration from a YAML file
 ///
@@ -23,6 +27,49 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config> {
         .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
     
     Ok(config)
+}
+
+/// If `repos.githubonly.yaml` exists in the same directory as `path`, merge its repos
+/// into the config (by name: only add extra repos not already present). Writes
+/// the merged config back to `path`. No-op if the extra file does not exist.
+///
+/// Called after the Python script writes NGC repos to `path` when using `--refresh-repos`.
+pub fn merge_extra_repos<P: AsRef<Path>>(path: P) -> Result<()> {
+    let path = path.as_ref();
+    let extra_path = path.with_file_name(EXTRA_REPOS_FILENAME);
+    if !extra_path.exists() {
+        return Ok(());
+    }
+    let main_content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+    let mut main_config: Config = serde_yaml::from_str(&main_content)
+        .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+    let extra_content = std::fs::read_to_string(&extra_path)
+        .with_context(|| format!("Failed to read extra repos file: {}", extra_path.display()))?;
+    let extra_config: Config = serde_yaml::from_str(&extra_content)
+        .with_context(|| format!("Failed to parse extra repos file: {}", extra_path.display()))?;
+    let main_names: HashSet<String> = main_config.repos.iter().map(|r| r.name.clone()).collect();
+    let mut added = 0usize;
+    for r in extra_config.repos {
+        if !main_names.contains(&r.name) {
+            main_config.repos.push(r);
+            added += 1;
+        }
+    }
+    if added == 0 {
+        return Ok(());
+    }
+    let merged_yaml = serde_yaml::to_string(&main_config)
+        .context("Failed to serialize merged config")?;
+    std::fs::write(path, merged_yaml)
+        .with_context(|| format!("Failed to write config file: {}", path.display()))?;
+    log::info!(
+        "Merged {} repo(s) from {} into {}",
+        added,
+        extra_path.display(),
+        path.display()
+    );
+    Ok(())
 }
 
 /// Validation error types
