@@ -103,6 +103,14 @@ Optional flags:
 - `--depth 1`
 - `--output config/repos.yaml`
 
+### Extra repos (repos.githubonly.yaml)
+
+When you run with `--refresh-repos`, the scanner first overwrites `repos.yaml` with repos from the NGC Build API, then **merges** any repos from **`repos.githubonly.yaml`** in the same directory. Use this to always scan a fixed set of custom repos without changing the command.
+
+- Put `repos.githubonly.yaml` next to your config, e.g. `config/repos.githubonly.yaml` when using `-c config/repos.yaml`.
+- Same format as `repos.yaml` (`version`, `defaults`, `repos`). Repos are merged by `name`; duplicates (same name as in NGC list) are skipped so only extra repos are added.
+- Copy from `config/repos.githubonly.yaml.example` and add your entries under `repos:`.
+
 ## Commands
 
 ### `scan` - Scan Repositories
@@ -118,7 +126,7 @@ nim-usage-scanner scan [OPTIONS] -c <CONFIG> [--ngc-api-key <KEY>] [--github-tok
 | `-w, --workdir` | Working directory for cloning repos (optional; uses temp dir if omitted) |
 | `--keep-repos` | Keep cloned repositories after scanning; with `--workdir`, next run reuses and pulls instead of cloning (default: false) |
 | `-j, --jobs` | Maximum number of parallel jobs (optional) |
-| `--refresh-repos` | Regenerate repos.yaml from Build Page before scanning (default: false) |
+| `--refresh-repos` | Regenerate repos.yaml from Build Page, then merge repos from repos.githubonly.yaml (same dir as config) (default: false) |
 | `--ngc-api-key` | NVIDIA API Key (or use `NVIDIA_API_KEY` env var, optional) |
 | `--github-token` | GitHub Token (or use `GITHUB_TOKEN` env var, optional) |
 | `-v, --verbose` | Increase logging verbosity |
