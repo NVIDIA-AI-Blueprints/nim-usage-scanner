@@ -111,6 +111,18 @@ When you run with `--refresh-repos`, the scanner first overwrites `repos.yaml` w
 - Same format as `repos.yaml` (`version`, `defaults`, `repos`). Repos are merged by `name`; duplicates (same name as in NGC list) are skipped so only extra repos are added.
 - Copy from `config/repos.githubonly.yaml.example` and add your entries under `repos:`.
 
+### Ignored repos (repos.ignored.yaml)
+
+Put repository names in **`repos.ignored.yaml`** next to your main config to exclude them from both repository refresh and scanning. Names are matched case-insensitively against the `name` field in `repos.yaml`.
+
+```yaml
+version: "1.0"
+repos:
+  - NVIDIA-AI-Blueprints/example-repo
+```
+
+When `--refresh-repos` is used, ignored repos are removed after the NGC and `repos.githubonly.yaml` lists are merged. The ignore list is also applied at scan time, so it works without refreshing and prevents ignored entries already present in `repos.yaml` from being scanned.
+
 ## Commands
 
 ### `scan` - Scan Repositories
@@ -126,7 +138,7 @@ nim-usage-scanner scan [OPTIONS] -c <CONFIG> [--ngc-api-key <KEY>] [--github-tok
 | `-w, --workdir` | Working directory for cloning repos (optional; uses temp dir if omitted) |
 | `--keep-repos` | Keep cloned repositories after scanning; with `--workdir`, next run reuses and pulls instead of cloning (default: false) |
 | `-j, --jobs` | Maximum number of parallel jobs (optional) |
-| `--refresh-repos` | Regenerate repos.yaml from Build Page, then merge repos from repos.githubonly.yaml (same dir as config) (default: false) |
+| `--refresh-repos` | Regenerate repos.yaml from Build Page, merge repos from repos.githubonly.yaml, then remove repos from repos.ignored.yaml (same dir as config) (default: false) |
 | `--ngc-api-key` | NVIDIA API Key (or use `NVIDIA_API_KEY` env var, optional) |
 | `--github-token` | GitHub Token (or use `GITHUB_TOKEN` env var, optional) |
 | `-v, --verbose` | Increase logging verbosity |

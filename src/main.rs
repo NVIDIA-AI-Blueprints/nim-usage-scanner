@@ -183,6 +183,8 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         }
         config::merge_extra_repos(&args.config)
             .context("Failed to merge extra repos from repos.githubonly.yaml")?;
+        config::remove_ignored_repos(&args.config)
+            .context("Failed to remove repos from repos.ignored.yaml")?;
     }
 
     // Load and validate configuration
@@ -196,13 +198,16 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     // Apply defaults and filter enabled repos
     let repos = config::apply_defaults(&config);
     let repos = config::filter_enabled(repos);
+    let ignored_names = config::load_ignored_repo_names(&args.config)
+        .context("Failed to load repos.ignored.yaml")?;
+    let repos = config::filter_ignored(repos, &ignored_names);
     
     if repos.is_empty() {
-        warn!("No enabled repositories found in configuration");
+        warn!("No enabled, non-ignored repositories found in configuration");
         return Ok(());
     }
     
-    info!("Found {} enabled repositories to scan", repos.len());
+    info!("Found {} enabled, non-ignored repositories to scan", repos.len());
     
     // Create working directory
     let temp_dir: Option<TempDir>;

@@ -46,3 +46,4 @@ Thumbs.db
 
 # Cloned repositories (temporary)
 repos/
+scripts/__pycache__/generate_repos_from_ngc.cpython-312.pyc

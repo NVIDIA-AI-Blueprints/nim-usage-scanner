@@ -138,6 +138,27 @@ def repo_name_from_github_url(url: str) -> str | None:
     return f"{owner}/{repo}"
 
 
+def load_ignored_repos(path: Path) -> set[str]:
+    """Load repo names from the simple `repos:` list in repos.ignored.yaml."""
+    if not path.exists():
+        return set()
+
+    ignored: set[str] = set()
+    in_repos = False
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not raw_line.startswith((" ", "\t")):
+            in_repos = line == "repos:"
+            continue
+        if in_repos and line.startswith("- "):
+            name = line[2:].split("#", 1)[0].strip().strip("'\"")
+            if name:
+                ignored.add(name.removesuffix(".git").lower())
+    return ignored
+
+
 def fetch_blueprint_repos(
     org_name: str,
     label: str,
@@ -293,6 +314,16 @@ def main() -> None:
         raise SystemExit(1)
 
     output_path = Path(args.output)
+    ignore_path = output_path.with_name("repos.ignored.yaml")
+    ignored = load_ignored_repos(ignore_path)
+    if ignored:
+        original_count = len(repos)
+        repos = [repo for repo in repos if repo.lower() not in ignored]
+        print(
+            f"[Build Page] Ignored {original_count - len(repos)} repo(s) "
+            f"listed in {ignore_path}"
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     content = render_repos_yaml(repos, args.branch, args.depth)
     output_path.write_text(content, encoding="utf-8")
