@@ -46,8 +46,12 @@ def load_json(path: str, default):
         return default
 
 
-def affected_nims(entry: dict) -> list[str]:
-    return list(entry.get("affected_hosted_nims") or []) + list(entry.get("affected_local_nims") or [])
+def entries_with(affected: list, nims_key: str) -> list:
+    """Affected blueprints that have at least one deprecated NIM under `nims_key`.
+
+    A blueprint with both hosted and local deprecated NIMs appears in both lists.
+    """
+    return [e for e in affected if e.get(nims_key)]
 
 
 def render_html(
@@ -81,15 +85,22 @@ def render_html(
         details("Added active", added_active),
         details("Removed active", removed_active),
         details("Added deprecated", added_deprecated),
-        f"<h3>Blueprints affected by deprecated NIMs: {len(affected)}</h3>",
     ]
-    if affected:
-        items = []
-        for entry in affected:
-            repo = html.escape(str(entry.get("repository", "")))
-            nims = html.escape(", ".join(affected_nims(entry)))
-            items.append(f"<li><strong>{repo}</strong>{' &mdash; ' + nims if nims else ''}</li>")
-        parts.append("<ul>\n" + "\n".join(items) + "\n</ul>")
+
+    def affected_section(title: str, nims_key: str) -> None:
+        entries = entries_with(affected, nims_key)
+        parts.append(f"<h3>{html.escape(title)}: {len(entries)}</h3>")
+        if entries:
+            items = []
+            for entry in entries:
+                repo = html.escape(str(entry.get("repository", "")))
+                nims = html.escape(", ".join(entry.get(nims_key) or []))
+                items.append(f"<li><strong>{repo}</strong>{' &mdash; ' + nims if nims else ''}</li>")
+            parts.append("<ul>\n" + "\n".join(items) + "\n</ul>")
+
+    affected_section("Blueprints affected by deprecated NIMs (hosted)", "affected_hosted_nims")
+    affected_section("Blueprints affected by deprecated NIMs (local)", "affected_local_nims")
+
     if run_url:
         parts.append(f'<p><a href="{html.escape(run_url)}">View run</a></p>')
     return "\n".join(p for p in parts if p) + "\n"
@@ -114,13 +125,18 @@ def render_slack(
     lines = [
         f"*Repos refresh:* active {active_after} (added {len(added_active)}, removed {len(removed_active)}), "
         f"deprecated {deprecated_after} (added {len(added_deprecated)})",
-        f"*Blueprints affected by deprecated NIMs:* {len(affected)}",
     ]
-    if affected:
-        for entry in affected[:SLACK_LIST_CAP]:
+
+    def affected_section(title: str, nims_key: str) -> None:
+        entries = entries_with(affected, nims_key)
+        lines.append(f"*{title}:* {len(entries)}")
+        for entry in entries[:SLACK_LIST_CAP]:
             lines.append(f"• {entry.get('repository', '')}")
-        if len(affected) > SLACK_LIST_CAP:
-            lines.append(f"…and {len(affected) - SLACK_LIST_CAP} more")
+        if len(entries) > SLACK_LIST_CAP:
+            lines.append(f"…and {len(entries) - SLACK_LIST_CAP} more")
+
+    affected_section("Blueprints affected by deprecated NIMs (hosted)", "affected_hosted_nims")
+    affected_section("Blueprints affected by deprecated NIMs (local)", "affected_local_nims")
 
     attachment = {
         "color": color,
