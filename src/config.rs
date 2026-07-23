@@ -2,23 +2,9 @@
 //!
 //! This module handles loading and validating the repos.yaml configuration file.
 
-use std::collections::HashSet;
 use std::path::Path;
 use anyhow::{Context, Result, bail};
 use crate::models::{Config, RepoConfig};
-
-/// Filename for optional extra repos merged when using `--refresh-repos`.
-pub const EXTRA_REPOS_FILENAME: &str = "repos.githubonly.yaml";
-/// Filename for repos excluded from refresh and scanning.
-pub const IGNORED_REPOS_FILENAME: &str = "repos.ignored.yaml";
-
-#[derive(Debug, serde::Deserialize)]
-struct IgnoredReposConfig {
-    #[allow(dead_code)]
-    version: Option<String>,
-    #[serde(default)]
-    repos: Vec<String>,
-}
 
 /// Load configuration from a YAML file
 ///
@@ -29,125 +15,25 @@ struct IgnoredReposConfig {
 /// * `Result<Config>` - Parsed configuration or error
 pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config> {
     let path = path.as_ref();
-    
+
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-    
+
     let config: Config = serde_yaml::from_str(&content)
         .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
-    
+
     Ok(config)
 }
 
-/// If `repos.githubonly.yaml` exists in the same directory as `path`, merge its repos
-/// into the config (by name: only add extra repos not already present). Writes
-/// the merged config back to `path`. No-op if the extra file does not exist.
-///
-/// Called after the Python script writes NGC repos to `path` when using `--refresh-repos`.
-pub fn merge_extra_repos<P: AsRef<Path>>(path: P) -> Result<()> {
-    let path = path.as_ref();
-    let extra_path = path.with_file_name(EXTRA_REPOS_FILENAME);
-    if !extra_path.exists() {
-        return Ok(());
-    }
-    let main_content = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-    let mut main_config: Config = serde_yaml::from_str(&main_content)
-        .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
-    let extra_content = std::fs::read_to_string(&extra_path)
-        .with_context(|| format!("Failed to read extra repos file: {}", extra_path.display()))?;
-    let extra_config: Config = serde_yaml::from_str(&extra_content)
-        .with_context(|| format!("Failed to parse extra repos file: {}", extra_path.display()))?;
-    let main_names: HashSet<String> = main_config.repos.iter().map(|r| r.name.clone()).collect();
-    let mut added = 0usize;
-    for r in extra_config.repos {
-        if !main_names.contains(&r.name) {
-            main_config.repos.push(r);
-            added += 1;
-        }
-    }
-    if added == 0 {
-        return Ok(());
-    }
-    let merged_yaml = serde_yaml::to_string(&main_config)
-        .context("Failed to serialize merged config")?;
-    std::fs::write(path, merged_yaml)
-        .with_context(|| format!("Failed to write config file: {}", path.display()))?;
-    log::info!(
-        "Merged {} repo(s) from {} into {}",
-        added,
-        extra_path.display(),
-        path.display()
-    );
-    Ok(())
-}
-
-/// Load ignored repository names from `repos.ignored.yaml` next to the main
-/// config. Missing files are treated as an empty ignore list.
-pub fn load_ignored_repo_names<P: AsRef<Path>>(path: P) -> Result<HashSet<String>> {
-    let ignored_path = path.as_ref().with_file_name(IGNORED_REPOS_FILENAME);
-    if !ignored_path.exists() {
-        return Ok(HashSet::new());
-    }
-
-    let content = std::fs::read_to_string(&ignored_path)
-        .with_context(|| format!("Failed to read ignored repos file: {}", ignored_path.display()))?;
-    let ignored: IgnoredReposConfig = serde_yaml::from_str(&content)
-        .with_context(|| format!("Failed to parse ignored repos file: {}", ignored_path.display()))?;
-
-    Ok(ignored
-        .repos
-        .into_iter()
-        .map(|name| name.trim().trim_end_matches(".git").to_lowercase())
-        .filter(|name| !name.is_empty())
-        .collect())
-}
-
-/// Remove repos listed in `repos.ignored.yaml` from an in-memory repo list.
-pub fn filter_ignored(
-    repos: Vec<RepoConfig>,
-    ignored_names: &HashSet<String>,
-) -> Vec<RepoConfig> {
-    repos
-        .into_iter()
-        .filter(|repo| {
-            !ignored_names.contains(
-                &repo.name
-                    .trim()
-                    .trim_end_matches(".git")
-                    .to_lowercase(),
-            )
-        })
+/// Repositories the scanner should clone and scan: `repos_active` followed by
+/// `repos_github_only`. `repos_deprecated` is intentionally excluded.
+pub fn scannable_repos(config: &Config) -> Vec<RepoConfig> {
+    config
+        .repos_active
+        .iter()
+        .chain(config.repos_github_only.iter())
+        .cloned()
         .collect()
-}
-
-/// Remove ignored repos from the main config and persist the result. This is
-/// used after refresh so ignored repos are not written back to `repos.yaml`.
-pub fn remove_ignored_repos<P: AsRef<Path>>(path: P) -> Result<usize> {
-    let path = path.as_ref();
-    let ignored_names = load_ignored_repo_names(path)?;
-    if ignored_names.is_empty() {
-        return Ok(0);
-    }
-
-    let mut config = load_config(path)?;
-    let original_count = config.repos.len();
-    config.repos = filter_ignored(config.repos, &ignored_names);
-    let removed = original_count - config.repos.len();
-
-    if removed > 0 {
-        let yaml = serde_yaml::to_string(&config)
-            .context("Failed to serialize config after applying ignored repos")?;
-        std::fs::write(path, yaml)
-            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
-        log::info!(
-            "Removed {} ignored repo(s) from {}",
-            removed,
-            path.display()
-        );
-    }
-
-    Ok(removed)
 }
 
 /// Validation error types
@@ -182,16 +68,18 @@ pub enum ValidationError {
 /// * `Err` with list of validation errors
 pub fn validate_config(config: &Config) -> Result<()> {
     let mut errors: Vec<ValidationError> = Vec::new();
-    
+
+    let repos = scannable_repos(config);
+
     // Check for empty repo list
-    if config.repos.is_empty() {
+    if repos.is_empty() {
         errors.push(ValidationError::EmptyRepoList);
     }
-    
+
     // Track names for duplicate detection
     let mut seen_names = std::collections::HashSet::new();
-    
-    for (index, repo) in config.repos.iter().enumerate() {
+
+    for (index, repo) in repos.iter().enumerate() {
         // Check for empty name
         if repo.name.trim().is_empty() {
             errors.push(ValidationError::EmptyName { index });
@@ -246,10 +134,9 @@ fn is_valid_git_url(url: &str) -> bool {
 /// # Returns
 /// * Vector of RepoConfig with defaults applied
 pub fn apply_defaults(config: &Config) -> Vec<RepoConfig> {
-    config
-        .repos
-        .iter()
-        .map(|repo| repo.clone().with_defaults(&config.defaults))
+    scannable_repos(config)
+        .into_iter()
+        .map(|repo| repo.with_defaults(&config.defaults))
         .collect()
 }
 
@@ -281,40 +168,57 @@ mod tests {
         assert!(!is_valid_git_url(""));
     }
 
+    fn repo(name: &str, url: &str) -> RepoConfig {
+        RepoConfig {
+            name: name.to_string(),
+            url: url.to_string(),
+            branch: None,
+            depth: None,
+            enabled: true,
+        }
+    }
+
     #[test]
     fn test_validate_empty_repos() {
         let config = Config {
             version: "1.0".to_string(),
             defaults: Defaults::default(),
-            repos: vec![],
+            repos_active: vec![],
+            repos_github_only: vec![],
+            repos_deprecated: vec![],
         };
-        
+
         assert!(validate_config(&config).is_err());
     }
 
     #[test]
-    fn test_validate_duplicate_names() {
+    fn test_scannable_repos_combines_active_and_github_only() {
         let config = Config {
             version: "1.0".to_string(),
             defaults: Defaults::default(),
-            repos: vec![
-                RepoConfig {
-                    name: "test".to_string(),
-                    url: "https://github.com/test/test1.git".to_string(),
-                    branch: None,
-                    depth: None,
-                    enabled: true,
-                },
-                RepoConfig {
-                    name: "test".to_string(),
-                    url: "https://github.com/test/test2.git".to_string(),
-                    branch: None,
-                    depth: None,
-                    enabled: true,
-                },
-            ],
+            repos_active: vec![repo("active", "https://github.com/test/active.git")],
+            repos_github_only: vec![repo("gh", "https://github.com/test/gh.git")],
+            // Deprecated names must never be scanned.
+            repos_deprecated: vec!["old/deprecated".to_string()],
         };
-        
+
+        let repos = scannable_repos(&config);
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].name, "active");
+        assert_eq!(repos[1].name, "gh");
+    }
+
+    #[test]
+    fn test_validate_duplicate_names() {
+        // A name duplicated across the two scanned sections is a duplicate.
+        let config = Config {
+            version: "1.0".to_string(),
+            defaults: Defaults::default(),
+            repos_active: vec![repo("test", "https://github.com/test/test1.git")],
+            repos_github_only: vec![repo("test", "https://github.com/test/test2.git")],
+            repos_deprecated: vec![],
+        };
+
         assert!(validate_config(&config).is_err());
     }
 
@@ -323,24 +227,17 @@ mod tests {
         let config = Config {
             version: "1.0".to_string(),
             defaults: Defaults::default(),
-            repos: vec![
-                RepoConfig {
-                    name: "repo1".to_string(),
-                    url: "https://github.com/test/repo1.git".to_string(),
-                    branch: None,
-                    depth: None,
-                    enabled: true,
-                },
-                RepoConfig {
-                    name: "repo2".to_string(),
-                    url: "git@github.com:test/repo2.git".to_string(),
-                    branch: Some("develop".to_string()),
-                    depth: Some(5),
-                    enabled: true,
-                },
-            ],
+            repos_active: vec![repo("repo1", "https://github.com/test/repo1.git")],
+            repos_github_only: vec![RepoConfig {
+                name: "repo2".to_string(),
+                url: "git@github.com:test/repo2.git".to_string(),
+                branch: Some("develop".to_string()),
+                depth: Some(5),
+                enabled: true,
+            }],
+            repos_deprecated: vec![],
         };
-        
+
         assert!(validate_config(&config).is_ok());
     }
 
@@ -352,26 +249,20 @@ mod tests {
                 branch: "develop".to_string(),
                 depth: 10,
             },
-            repos: vec![
-                RepoConfig {
-                    name: "repo1".to_string(),
-                    url: "https://github.com/test/repo1.git".to_string(),
-                    branch: None,
-                    depth: None,
-                    enabled: true,
-                },
-                RepoConfig {
-                    name: "repo2".to_string(),
-                    url: "https://github.com/test/repo2.git".to_string(),
-                    branch: Some("main".to_string()),
-                    depth: Some(1),
-                    enabled: true,
-                },
-            ],
+            repos_active: vec![repo("repo1", "https://github.com/test/repo1.git")],
+            repos_github_only: vec![RepoConfig {
+                name: "repo2".to_string(),
+                url: "https://github.com/test/repo2.git".to_string(),
+                branch: Some("main".to_string()),
+                depth: Some(1),
+                enabled: true,
+            }],
+            repos_deprecated: vec![],
         };
-        
+
         let repos = apply_defaults(&config);
-        
+
+        // active first, then github_only
         assert_eq!(repos[0].branch(), "develop");
         assert_eq!(repos[0].depth(), 10);
         assert_eq!(repos[1].branch(), "main");
@@ -381,13 +272,7 @@ mod tests {
     #[test]
     fn test_filter_enabled() {
         let repos = vec![
-            RepoConfig {
-                name: "enabled".to_string(),
-                url: "https://github.com/test/enabled.git".to_string(),
-                branch: None,
-                depth: None,
-                enabled: true,
-            },
+            repo("enabled", "https://github.com/test/enabled.git"),
             RepoConfig {
                 name: "disabled".to_string(),
                 url: "https://github.com/test/disabled.git".to_string(),
@@ -396,37 +281,9 @@ mod tests {
                 enabled: false,
             },
         ];
-        
+
         let filtered = filter_enabled(repos);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "enabled");
-    }
-
-    #[test]
-    fn test_filter_ignored_is_case_insensitive() {
-        let repos = vec![
-            RepoConfig {
-                name: "NVIDIA-AI-Blueprints/Example".to_string(),
-                url: "https://github.com/NVIDIA-AI-Blueprints/Example.git".to_string(),
-                branch: None,
-                depth: None,
-                enabled: true,
-            },
-            RepoConfig {
-                name: "NVIDIA/keep".to_string(),
-                url: "https://github.com/NVIDIA/keep.git".to_string(),
-                branch: None,
-                depth: None,
-                enabled: true,
-            },
-        ];
-        let ignored = HashSet::from([
-            "nvidia-ai-blueprints/example".to_string(),
-        ]);
-
-        let filtered = filter_ignored(repos, &ignored);
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "NVIDIA/keep");
     }
 }

@@ -42,7 +42,7 @@ export GITHUB_TOKEN="ghp_xxx"
 # Scan repositories defined in repos.yaml
 ./target/release/nim-usage-scanner scan -c config/repos.yaml
 
-# Regenerate repos.yaml from Build Page before scanning
+# Refresh repos.yaml from the Build catalog before scanning
 ./target/release/nim-usage-scanner scan -c config/repos.yaml --refresh-repos
 
 # Also flag blueprints that reference a deprecated NIM (config/nims.deprecated.yaml)
@@ -52,7 +52,7 @@ export GITHUB_TOKEN="ghp_xxx"
 # First run: clones into /tmp/blueprint-scan. Second and later runs: reuses existing dirs and pulls latest (no full clone).
 ./target/release/nim-usage-scanner scan -c config/repos.yaml --workdir /tmp/blueprint-scan --keep-repos --jobs 4
 # If a repo fails to clone with a Git LFS "smudge filter" error, prefix GIT_LFS_SKIP_SMUDGE=1 (see Troubleshooting)
-# Add --refresh-repos only when you want to regenerate repos.yaml from Build Page before scanning
+# Add --refresh-repos only when you want to refresh repos.yaml from the Build catalog before scanning
 
 # Output will be in ./output/report.json, ./output/report.csv, and ./output/report_aggregate.json
 # With --check-deprecation, ./output/deprecation_affected_blueprints.{json,csv} are added when any blueprint is affected
@@ -80,7 +80,11 @@ export GITHUB_TOKEN="ghp_xxx"
 
 ## Configuration
 
-Create a `repos.yaml` file:
+`repos.yaml` groups repositories into three categories:
+
+- **`repos_active`** — active on the Build catalog and not deprecated. **Scanned.** Full objects.
+- **`repos_github_only`** — only on GitHub (not returned by the Build API). **Scanned.** Full objects.
+- **`repos_deprecated`** — deprecated on Build. **Not scanned.** Names only.
 
 ```yaml
 version: "1.0"
@@ -89,51 +93,63 @@ defaults:
   branch: main
   depth: 1
 
-repos:
-  - name: NVIDIA/GenerativeAIExamples
-    url: https://github.com/NVIDIA/GenerativeAIExamples.git
-
-  - name: my-org/my-private-repo
-    url: https://github.com/my-org/my-private-repo.git
-    branch: develop
+# Active on Build and not deprecated. Scanned.
+repos_active:
+  - name: NVIDIA-AI-Blueprints/rag
+    url: https://github.com/NVIDIA-AI-Blueprints/rag.git
+    branch: main
     enabled: true   # optional, defaults to true; set false to skip
+
+# Only on GitHub (not returned by the Build API). Scanned.
+repos_github_only:
+  - name: NVIDIA/Mosaic
+    url: https://github.com/NVIDIA/Mosaic
+    branch: main
+    enabled: true
+
+# Deprecated on Build (DEPRECATION attribute). NOT scanned.
+repos_deprecated:
+  - NVIDIA-AI-Blueprints/llm-router
 ```
 
-### Generate repos.yaml from Build Blueprints (optional)
+The scanner only ever reads this one file — it does no merging, ignoring, or
+refreshing of its own. Keeping the lists in sync with the Build catalog is the
+job of the refresh script below.
 
-You can generate `config/repos.yaml` directly from the Build API
-and each endpoint's spec ("View GitHub" link). This uses the **NGC catalog resources API** (`/v2/search/catalog/resources/BLUEPRINT` with `query` and `pageSize`) to list all blueprints in one request, then `/v2/blueprints/{orgName}/{name}/spec` for each spec.
+### Refresh repos.yaml from the Build catalog
+
+`scripts/refresh_repos_config.py` reconciles `repos.yaml` with the live Build
+catalog. It lists all blueprints via the **NGC catalog resources API**
+(`/v2/search/catalog/resources/BLUEPRINT`), splits them into active vs deprecated
+using each blueprint's **`DEPRECATION`** attribute, resolves each to its GitHub
+repo via `/v2/blueprints/{orgName}/{name}/spec` ("View GitHub" link), then
+updates `repos.yaml` and writes a `repos_refresh_summary.json` to describe the changes.
 
 ```bash
-python scripts/generate_repos_from_ngc.py
+# Update in place
+python scripts/refresh_repos_config.py --config config/repos.yaml --in-place
+
+# Or write to a new file (leaves the input untouched)
+python scripts/refresh_repos_config.py --config config/repos.yaml --output repos-refreshed.yaml
 ```
 
-Optional flags:
-- `--label blueprint`
-- `--page-size 1000`
-- `--branch main`
-- `--depth 1`
-- `--output config/repos.yaml`
+Behavior:
+- New active blueprints are appended to `repos_active`; existing entries are kept
+  verbatim (so `enabled: false` overrides survive).
+- `repos_active` is grouped into **Enterprise Blueprints**, **Developer Examples**,
+  **Partner Examples**, and **NemoClaw** sections, derived from each blueprint's
+  `apicatalogtype_*` label (and repo owner for partners). The grouping is
+  regenerated on every run, so it stays stable and comment-free of manual edits.
+- Newly deprecated blueprints are added to `repos_deprecated`.
+- `repos_github_only` is never touched (manually curated).
+- Enabled active repos no longer returned by the catalog are reported as
+  `removed_active_blueprints` but only deleted when you pass `--prune-active`.
+  Disabled entries (`enabled: false`) are treated as inactive — they are never
+  flagged as removed or pruned.
 
-### Extra repos (repos.githubonly.yaml)
-
-When you run with `--refresh-repos`, the scanner first overwrites `repos.yaml` with repos from the NGC Build API, then **merges** any repos from **`repos.githubonly.yaml`** in the same directory. Use this to always scan a fixed set of custom repos without changing the command.
-
-- Put `repos.githubonly.yaml` next to your config, e.g. `config/repos.githubonly.yaml` when using `-c config/repos.yaml`.
-- Same format as `repos.yaml` (`version`, `defaults`, `repos`). Repos are merged by `name`; duplicates (same name as in NGC list) are skipped so only extra repos are added.
-- Copy from `config/repos.githubonly.yaml.example` and add your entries under `repos:`.
-
-### Ignored repos (repos.ignored.yaml)
-
-Put repository names in **`repos.ignored.yaml`** next to your main config to exclude them from both repository refresh and scanning. Names are matched case-insensitively against the `name` field in `repos.yaml`.
-
-```yaml
-version: "1.0"
-repos:
-  - NVIDIA-AI-Blueprints/example-repo
-```
-
-When `--refresh-repos` is used, ignored repos are removed after the NGC and `repos.githubonly.yaml` lists are merged. The ignore list is also applied at scan time, so it works without refreshing and prevents ignored entries already present in `repos.yaml` from being scanned.
+Optional flags: `--in-place`, `--output PATH`, `--summary-json PATH`,
+`--prune-active`, `--org`, `--page-size`, `--branch`, `--depth`. Requires PyYAML
+(`pip install -r requirements.txt`).
 
 ## Commands
 
@@ -150,7 +166,7 @@ nim-usage-scanner scan [OPTIONS] -c <CONFIG> [--ngc-api-key <KEY>] [--github-tok
 | `-w, --workdir` | Working directory for cloning repos (optional; uses temp dir if omitted) |
 | `--keep-repos` | Keep cloned repositories after scanning; with `--workdir`, next run reuses and pulls instead of cloning (default: false) |
 | `-j, --jobs` | Maximum number of parallel jobs (optional) |
-| `--refresh-repos` | Regenerate repos.yaml from Build Page, merge repos from repos.githubonly.yaml, then remove repos from repos.ignored.yaml (same dir as config) (default: false) |
+| `--refresh-repos` | Before scanning, run `scripts/refresh_repos_config.py --config <config> --in-place` to reconcile repos.yaml with the Build catalog (default: false) |
 | `--check-deprecation` | After scanning, run `scripts/find_deprecated_blueprints.py` to report blueprints referencing a deprecated NIM from `config/nims.deprecated.yaml`. Writes `deprecation_affected_blueprints.{json,csv}` to the output dir (only when at least one blueprint is affected). Requires PyYAML (see note in [Basic Usage](#basic-usage)) (default: false) |
 | `--ngc-api-key` | NVIDIA API Key (or use `NVIDIA_API_KEY` env var, optional) |
 | `--github-token` | GitHub Token (or use `GITHUB_TOKEN` env var, optional) |

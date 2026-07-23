@@ -188,20 +188,18 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     }
     
     if args.refresh_repos {
-        info!("Refreshing repos from Build Page...");
-        let status = Command::new("python3")
-            .arg("scripts/generate_repos_from_ngc.py")
-            .arg("--output")
+        info!("Refreshing repos config from Build Page...");
+        let python = python_interpreter();
+        let status = Command::new(&python)
+            .arg("scripts/refresh_repos_config.py")
+            .arg("--config")
             .arg(&args.config)
+            .arg("--in-place")
             .status()
-            .context("Failed to run Build Page repo generation script")?;
+            .context("Failed to run repos refresh script")?;
         if !status.success() {
-            bail!("Build Page repo generation script failed");
+            bail!("Repos refresh script failed");
         }
-        config::merge_extra_repos(&args.config)
-            .context("Failed to merge extra repos from repos.githubonly.yaml")?;
-        config::remove_ignored_repos(&args.config)
-            .context("Failed to remove repos from repos.ignored.yaml")?;
     }
 
     // Load and validate configuration
@@ -212,19 +210,16 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     config::validate_config(&config)
         .context("Configuration validation failed")?;
     
-    // Apply defaults and filter enabled repos
+    // Apply defaults and filter enabled repos (scans repos_active + repos_github_only)
     let repos = config::apply_defaults(&config);
     let repos = config::filter_enabled(repos);
-    let ignored_names = config::load_ignored_repo_names(&args.config)
-        .context("Failed to load repos.ignored.yaml")?;
-    let repos = config::filter_ignored(repos, &ignored_names);
-    
+
     if repos.is_empty() {
-        warn!("No enabled, non-ignored repositories found in configuration");
+        warn!("No enabled repositories found in configuration");
         return Ok(());
     }
-    
-    info!("Found {} enabled, non-ignored repositories to scan", repos.len());
+
+    info!("Found {} enabled repositories to scan", repos.len());
     
     // Create working directory
     let temp_dir: Option<TempDir>;
