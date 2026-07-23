@@ -10,6 +10,10 @@ fragment (suitable for GitHub Actions' $GITHUB_STEP_SUMMARY) that shows:
 Inputs are the two report.json files and the two repos.yaml config files.
 Missing/unreadable inputs degrade gracefully so the summary still renders when
 one scan failed.
+
+When `--summary-json` is given it also writes a small machine-readable summary
+of the config change (repo counts before/after refresh, plus added/removed
+counts). The workflow reads that file to decide whether to notify Slack.
 """
 
 from __future__ import annotations
@@ -143,6 +147,10 @@ def main() -> None:
     ap.add_argument("--refresh-report", required=True)
     ap.add_argument("--original-config", required=True)
     ap.add_argument("--refreshed-config", required=True)
+    ap.add_argument(
+        "--summary-json",
+        help="Write a machine-readable JSON summary of the config change here.",
+    )
     args = ap.parse_args()
 
     original_report = load_report(args.original_report)
@@ -150,6 +158,11 @@ def main() -> None:
 
     original_metrics = report_metrics(original_report)
     refresh_metrics = report_metrics(refresh_report)
+
+    original = repo_names(args.original_config)
+    refreshed = repo_names(args.refreshed_config)
+    added = refreshed - original
+    removed = original - refreshed
 
     parts: list[str] = ["<h2>NIM Usage Scan — refresh comparison</h2>"]
 
@@ -169,29 +182,31 @@ def main() -> None:
     parts.append(render_metrics_table(original_metrics, refresh_metrics))
 
     # 2) Repos added / removed after refreshing.
-    original = repo_names(args.original_config)
-    refreshed = repo_names(args.refreshed_config)
     parts.append("<h3>Config changes after refresh</h3>")
     parts.append(
         f"<p>Config repo count: <strong>{len(original)}</strong> before → "
         f"<strong>{len(refreshed)}</strong> after refresh.</p>"
     )
-    parts.append(
-        render_list_section(
-            "Repos added after refresh",
-            refreshed - original,
-            "none",
-        )
-    )
-    parts.append(
-        render_list_section(
-            "Repos removed after refresh",
-            original - refreshed,
-            "none",
-        )
-    )
+    parts.append(render_list_section("Repos added after refresh", added, "none"))
+    parts.append(render_list_section("Repos removed after refresh", removed, "none"))
 
     print("\n".join(parts))
+
+    # Machine-readable summary of the config change for the workflow to act on.
+    if args.summary_json:
+        Path(args.summary_json).write_text(
+            json.dumps(
+                {
+                    "repos_before": len(original),
+                    "repos_after": len(refreshed),
+                    "added": len(added),
+                    "removed": len(removed),
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
 
 if __name__ == "__main__":

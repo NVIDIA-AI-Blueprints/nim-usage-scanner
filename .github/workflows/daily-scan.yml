@@ -7,6 +7,8 @@ run-name: "Daily Scan - #${{ github.run_number }}"
 # Required secrets:
 # - CI_NVIDIA_API_KEY: for querying Blueprints information from NVIDIA NGC
 # - CI_GITHUB_TOKEN: for fetching repository metadata and cloning repositories
+# Optional secrets:
+# - SLACK_WEBHOOK_URL: for sending notifications to Slack
 
 # Builds the scanner and runs it once a day twice: first against the committed
 # blueprint list (no refresh), then against a freshly refreshed list. Both
@@ -82,8 +84,10 @@ jobs:
             -o output-refreshed --refresh-repos --jobs 4
 
       # Compare the two runs and write an HTML summary to the run's Summary tab:
-      # totals for both runs, finding mismatches, and repos added/removed after
-      # refreshing. Degrades gracefully if either scan produced no report.
+      # totals for both runs and repos added/removed after refreshing. Also
+      # writes scan-summary.json (repo counts before/after, added/removed
+      # counts) for the notify step. Degrades gracefully if a scan produced no
+      # report.
       - name: Write scan comparison summary
         if: always()
         run: |
@@ -92,7 +96,43 @@ jobs:
             --refresh-report output-refreshed/report.json \
             --original-config config/repos.yaml \
             --refreshed-config config-refreshed/repos.yaml \
+            --summary-json scan-summary.json \
             >> "$GITHUB_STEP_SUMMARY"
+
+      # There is a difference when refreshing added and/or removed repos.
+      - name: Detect config differences
+        id: diff
+        if: always()
+        run: |
+          added=$(jq -r '.added // 0' scan-summary.json 2>/dev/null || echo 0)
+          removed=$(jq -r '.removed // 0' scan-summary.json 2>/dev/null || echo 0)
+          if [ "$added" -gt 0 ] || [ "$removed" -gt 0 ]; then
+            echo "has_diff=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_diff=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Notify Slack only when the two runs differ. No-ops when
+      # SLACK_WEBHOOK_URL is unset, and a Slack hiccup never fails the scan job.
+      - name: Notify Slack on differences
+        if: always() && steps.diff.outputs.has_diff == 'true'
+        continue-on-error: true
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.CI_SLACK_WEBHOOK_VRDC_BPQA_MONITORING_CHANNEL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK_URL" ]; then
+            echo "SLACK_WEBHOOK_URL not set; skipping Slack notification."
+            exit 0
+          fi
+          before=$(jq -r '.repos_before' scan-summary.json)
+          after=$(jq -r '.repos_after' scan-summary.json)
+          added=$(jq -r '.added' scan-summary.json)
+          removed=$(jq -r '.removed' scan-summary.json)
+          text=":rotating_light: *NIM Usage Scan #${RUN_NUMBER}* — refreshing changed the repo list: ${before} → ${after} repos (added ${added}, removed ${removed}). <${RUN_URL}|View run>"
+          jq -n --arg text "$text" '{text: $text}' \
+            | curl -sSf -X POST -H 'Content-type: application/json' -d @- "$SLACK_WEBHOOK_URL"
 
       - name: Upload binary, configs, and reports
         if: always()
