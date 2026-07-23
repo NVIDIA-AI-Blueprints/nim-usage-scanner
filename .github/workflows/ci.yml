@@ -1,0 +1,49 @@
+name: CI
+
+# Common Rust checks: format, lint, test, and build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref (but never cancel a push to main).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pinned SHA is the org-allowlisted release of setup-rust-toolchain (the
+      # maintained successor to dtolnay/rust-toolchain). It also caches cargo
+      # build artifacts, so no separate rust-cache step is needed.
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
+        with:
+          components: rustfmt, clippy
+          # The action defaults RUSTFLAGS to "-D warnings"; clear it so warnings
+          # don't fail the build.
+          rustflags: ""
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features
+
+      - name: Test
+        run: cargo test --all-features
+
+      - name: Build (release)
+        run: cargo build --release
