@@ -6,14 +6,17 @@ fragment (suitable for GitHub Actions' $GITHUB_STEP_SUMMARY) that shows:
 
   * total repos and finding counts for both runs, side by side, with deltas
   * repositories added / removed in the config after refreshing
+  * blueprints affected by deprecated NIMs in each run (from --check-deprecation)
 
-Inputs are the two report.json files and the two repos.yaml config files.
-Missing/unreadable inputs degrade gracefully so the summary still renders when
-one scan failed.
+Inputs are the two scan output folders (each holding report.json and, when any
+blueprint is affected, deprecation_affected_blueprints.json) plus the two
+repos.yaml config files. Missing/unreadable inputs degrade gracefully so the
+summary still renders when one scan failed or produced no affected blueprints.
 
 When `--summary-json` is given it also writes a small machine-readable summary
-of the config change (repo counts before/after refresh, plus added/removed
-counts). The workflow reads that file to decide whether to notify Slack.
+of the config change (repo counts before/after refresh, added/removed counts,
+plus affected-blueprint counts). The workflow reads that file to decide whether
+to notify Slack.
 """
 
 from __future__ import annotations
@@ -23,14 +26,30 @@ import json
 import re
 from pathlib import Path
 
+# Report files the scanner writes into each scan's output folder.
+REPORT_FILENAME = "report.json"
+DEPRECATION_FILENAME = "deprecation_affected_blueprints.json"
 
-def load_report(path: str) -> dict | None:
+
+def load_report(path: str | Path) -> dict | None:
     """Load a report.json, returning None if it is missing or invalid."""
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def load_affected(path: str | Path) -> list:
+    """Load a deprecation_affected_blueprints.json, returning [] when the file
+    is absent (no blueprint was affected, so the scanner wrote nothing) or
+    invalid."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
 
 
 def repo_names(config_path: str) -> set[str]:
@@ -141,10 +160,40 @@ def render_list_section(title: str, items: set[str], empty_msg: str) -> str:
     )
 
 
+def render_affected_section(title: str, affected: list) -> str:
+    """Render a collapsible list of blueprints affected by deprecated NIMs, each
+    with its offending hosted/local NIM references."""
+    if not affected:
+        return f"<p><strong>{esc(title)}:</strong> none affected</p>"
+    rows = []
+    for bp in affected:
+        repo = bp.get("repository", "")
+        url = bp.get("repository_url", "")
+        nims = (bp.get("affected_hosted_nims") or []) + (bp.get("affected_local_nims") or [])
+        name = f'<a href="{esc(url)}">{esc(repo)}</a>' if url else f"<code>{esc(repo)}</code>"
+        nims_html = ", ".join(f"<code>{esc(n)}</code>" for n in nims) or "—"
+        rows.append(f"<li>{name}: {nims_html}</li>")
+    lis = "\n".join(rows)
+    return (
+        f"<details><summary><strong>{esc(title)}</strong> "
+        f"({len(affected)})</summary>\n<ul>\n{lis}\n</ul>\n</details>"
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--original-report", required=True)
-    ap.add_argument("--refresh-report", required=True)
+    ap.add_argument(
+        "--original-output",
+        required=True,
+        help=f"Output folder of the original scan (contains {REPORT_FILENAME} "
+        f"and, when any blueprint is affected, {DEPRECATION_FILENAME}).",
+    )
+    ap.add_argument(
+        "--refresh-output",
+        required=True,
+        help="Output folder of the refreshed scan (same layout as "
+        "--original-output).",
+    )
     ap.add_argument("--original-config", required=True)
     ap.add_argument("--refreshed-config", required=True)
     ap.add_argument(
@@ -153,8 +202,11 @@ def main() -> None:
     )
     args = ap.parse_args()
 
-    original_report = load_report(args.original_report)
-    refresh_report = load_report(args.refresh_report)
+    original_out = Path(args.original_output)
+    refresh_out = Path(args.refresh_output)
+
+    original_report = load_report(original_out / REPORT_FILENAME)
+    refresh_report = load_report(refresh_out / REPORT_FILENAME)
 
     original_metrics = report_metrics(original_report)
     refresh_metrics = report_metrics(refresh_report)
@@ -163,6 +215,9 @@ def main() -> None:
     refreshed = repo_names(args.refreshed_config)
     added = refreshed - original
     removed = original - refreshed
+
+    original_affected = load_affected(original_out / DEPRECATION_FILENAME)
+    refresh_affected = load_affected(refresh_out / DEPRECATION_FILENAME)
 
     parts: list[str] = ["<h2>NIM Usage Scan — refresh comparison</h2>"]
 
@@ -190,6 +245,15 @@ def main() -> None:
     parts.append(render_list_section("Repos added after refresh", added, "none"))
     parts.append(render_list_section("Repos removed after refresh", removed, "none"))
 
+    # 3) Blueprints affected by deprecated NIMs (from --check-deprecation).
+    parts.append("<h3>Blueprints affected by deprecated NIMs</h3>")
+    parts.append(
+        f"<p>Affected blueprints: <strong>{len(original_affected)}</strong> (original) → "
+        f"<strong>{len(refresh_affected)}</strong> (refreshed).</p>"
+    )
+    parts.append(render_affected_section("Original — affected blueprints", original_affected))
+    parts.append(render_affected_section("Refreshed — affected blueprints", refresh_affected))
+
     print("\n".join(parts))
 
     # Machine-readable summary of the config change for the workflow to act on.
@@ -201,6 +265,8 @@ def main() -> None:
                     "repos_after": len(refreshed),
                     "added": len(added),
                     "removed": len(removed),
+                    "affected_before": len(original_affected),
+                    "affected_after": len(refresh_affected),
                 },
                 indent=2,
             )

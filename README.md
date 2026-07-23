@@ -10,6 +10,7 @@ A static code analyzer that scans Git repositories to discover and catalog NVIDI
 - **Source Classification**: Distinguish between source code and GitHub Actions workflow usage
 - **NGC API Enrichment**: Resolve `latest` tags and fetch Function details
 - **Query Mode**: Directly query NIM information by model/image name
+- **Deprecation Check**: Flag blueprints that reference a deprecated NIM (from `config/nims.deprecated.yaml`)
 
 ## Quick Start
 
@@ -44,6 +45,9 @@ export GITHUB_TOKEN="ghp_xxx"
 # Regenerate repos.yaml from Build Page before scanning
 ./target/release/nim-usage-scanner scan -c config/repos.yaml --refresh-repos
 
+# Also flag blueprints that reference a deprecated NIM (config/nims.deprecated.yaml)
+./target/release/nim-usage-scanner scan -c config/repos.yaml --check-deprecation
+
 # Use a persistent workdir and keep repos after scan (recommended for repeated runs)
 # First run: clones into /tmp/blueprint-scan. Second and later runs: reuses existing dirs and pulls latest (no full clone).
 ./target/release/nim-usage-scanner scan -c config/repos.yaml --workdir /tmp/blueprint-scan --keep-repos --jobs 4
@@ -51,7 +55,14 @@ export GITHUB_TOKEN="ghp_xxx"
 # Add --refresh-repos only when you want to regenerate repos.yaml from Build Page before scanning
 
 # Output will be in ./output/report.json, ./output/report.csv, and ./output/report_aggregate.json
+# With --check-deprecation, ./output/deprecation_affected_blueprints.{json,csv} are added when any blueprint is affected
 ```
+
+> **Note:** `--check-deprecation` shells out to `scripts/find_deprecated_blueprints.py`, which requires **PyYAML**. The scanner runs it with the repo's `.venv` if present, otherwise `python3` on `PATH`. Set up the dependency once with:
+>
+> ```bash
+> python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
+> ```
 
 #### 2. Query NIM Information
 
@@ -140,6 +151,7 @@ nim-usage-scanner scan [OPTIONS] -c <CONFIG> [--ngc-api-key <KEY>] [--github-tok
 | `--keep-repos` | Keep cloned repositories after scanning; with `--workdir`, next run reuses and pulls instead of cloning (default: false) |
 | `-j, --jobs` | Maximum number of parallel jobs (optional) |
 | `--refresh-repos` | Regenerate repos.yaml from Build Page, merge repos from repos.githubonly.yaml, then remove repos from repos.ignored.yaml (same dir as config) (default: false) |
+| `--check-deprecation` | After scanning, run `scripts/find_deprecated_blueprints.py` to report blueprints referencing a deprecated NIM from `config/nims.deprecated.yaml`. Writes `deprecation_affected_blueprints.{json,csv}` to the output dir (only when at least one blueprint is affected). Requires PyYAML (see note in [Basic Usage](#basic-usage)) (default: false) |
 | `--ngc-api-key` | NVIDIA API Key (or use `NVIDIA_API_KEY` env var, optional) |
 | `--github-token` | GitHub Token (or use `GITHUB_TOKEN` env var, optional) |
 | `-v, --verbose` | Increase logging verbosity |
@@ -271,6 +283,30 @@ Unified CSV with all findings:
 source_type,nim_type,repository,file_path,line_number,image_url,tag,resolved_tag,endpoint_url,model_name,function_id,status,container_image,match_context
 source_code,local_nim,NVIDIA/Example,Dockerfile,5,nvcr.io/nim/nvidia/llama,latest,1.10.0,,,,,"FROM nvcr.io/nim/..."
 source_code,hosted_nim,NVIDIA/Example,src/main.py,42,,,,https://ai.api.nvidia.com,nvidia/llama,abc-123,ACTIVE,nvcr.io/...,"model=..."
+```
+
+### Deprecation Report (`deprecation_affected_blueprints.{json,csv}`)
+
+Produced only with `--check-deprecation`, and only when at least one blueprint is affected. Deprecated NIM identifiers are read from `config/nims.deprecated.yaml` (a flat `deprecated:` list) and matched **case-insensitively** as **substrings** against every NIM reference found by the scan (both hosted and local). Fields: `repository`, `repository_url`, `affected_hosted_nims`, `affected_local_nims`.
+
+```json
+[
+  {
+    "repository": "NVIDIA-AI-Blueprints/content-localization",
+    "repository_url": "https://github.com/NVIDIA-AI-Blueprints/content-localization",
+    "affected_hosted_nims": [],
+    "affected_local_nims": ["nvcr.io/nim/nvidia/active-speaker-detection:1.0.0"]
+  }
+]
+```
+
+The deprecated list (`config/nims.deprecated.yaml`):
+
+```yaml
+version: "1.0"
+deprecated:
+  - nvidia/active-speaker-detection
+  - nemotron-3-nano
 ```
 
 ## Environment Variables
