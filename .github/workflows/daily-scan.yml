@@ -8,8 +8,10 @@ run-name: "Daily Scan - #${{ github.run_number }}"
 # - CI_NVIDIA_API_KEY: for querying Blueprints information from NVIDIA NGC
 # - CI_GITHUB_TOKEN: for fetching repository metadata and cloning repositories
 
-# Builds the scanner and runs it once a day against the refreshed blueprint
-# list, then stores the built binary, config, and reports as build artifacts.
+# Builds the scanner and runs it once a day twice: first against the committed
+# blueprint list (no refresh), then against a freshly refreshed list. Both
+# configs and reports are stored as artifacts, and a comparison of the two runs
+# is written to the run's job summary.
 on:
   schedule:
     # 06:00 UTC every day
@@ -50,16 +52,49 @@ jobs:
       - name: Build (release)
         run: cargo build --release
 
-      - name: Run daily NIM scan (refresh repos)
+      # First scan: use the committed config as-is (no refresh). Reports go to
+      # ./output and the committed config/ is left untouched.
+      - name: Run NIM scan (no refresh)
         env:
           NVIDIA_API_KEY: ${{ secrets.CI_NVIDIA_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
           GIT_LFS_SKIP_SMUDGE: 1  # skip LFS file download during clone
         run: |
           ./target/release/nim-usage-scanner scan -c config/repos.yaml \
-            --refresh-repos --jobs 4
+            -o output --jobs 4
 
-      - name: Upload binary, config, and reports
+      # Second scan: refresh the blueprint list first. `--refresh-repos`
+      # overwrites its config in place and reads repos.githubonly.yaml /
+      # repos.ignored.yaml from the same dir, so copy the whole config/ dir to
+      # config-refreshed/ and point the scan there. That keeps the committed
+      # config/ pristine (as the "before" side of the diff) and leaves the
+      # regenerated list in config-refreshed/. Reports go to ./output-refreshed.
+      # Runs even if the first scan failed so the comparison still has data.
+      - name: Run NIM scan (refresh repos)
+        if: always()
+        env:
+          NVIDIA_API_KEY: ${{ secrets.CI_NVIDIA_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+          GIT_LFS_SKIP_SMUDGE: 1  # skip LFS file download during clone
+        run: |
+          cp -r config config-refreshed
+          ./target/release/nim-usage-scanner scan -c config-refreshed/repos.yaml \
+            -o output-refreshed --refresh-repos --jobs 4
+
+      # Compare the two runs and write an HTML summary to the run's Summary tab:
+      # totals for both runs, finding mismatches, and repos added/removed after
+      # refreshing. Degrades gracefully if either scan produced no report.
+      - name: Write scan comparison summary
+        if: always()
+        run: |
+          python .github/workflows/scripts/build-daily-scan-summary.py \
+            --original-report output/report.json \
+            --refresh-report output-refreshed/report.json \
+            --original-config config/repos.yaml \
+            --refreshed-config config-refreshed/repos.yaml \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload binary, configs, and reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -67,7 +102,10 @@ jobs:
           path: |
             target/release/nim-usage-scanner
             config/
+            config-refreshed/
             !config/repos.githubonly.yaml.example
+            !config-refreshed/repos.githubonly.yaml.example
             output/
+            output-refreshed/
           if-no-files-found: error
           retention-days: 30
