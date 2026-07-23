@@ -27,6 +27,14 @@ output/
 tmp/
 temp/
 
+# Python virtual environment
+.venv/
+venv/
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
 # Environment files (may contain API keys)
 .env
 .env.local
@@ -50,4 +58,3 @@ Thumbs.db
 # Cloned repositories (temporary)
 repos/
 .repo-cache/
-scripts/__pycache__/generate_repos_from_ngc.cpython-312.pyc
