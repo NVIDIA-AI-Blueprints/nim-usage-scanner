@@ -77,6 +77,11 @@ struct ScanArgs {
     /// Regenerate repos.yaml from Build Page before scanning
     #[arg(long, default_value = "false")]
     refresh_repos: bool,
+
+    /// After scanning, find blueprints that reference a deprecated NIM
+    /// (runs scripts/find_deprecated_blueprints.py against config/nims.deprecated.yaml)
+    #[arg(long, default_value = "false")]
+    check_deprecation: bool,
 }
 
 /// Arguments for the query subcommand
@@ -127,6 +132,18 @@ struct LocalNimQueryArgs {
     /// Increase logging verbosity (-v, -vv, -vvv)
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+}
+
+/// Pick the Python interpreter for helper scripts. Prefer the repo virtualenv
+/// (`.venv`, which has the scripts' dependencies like PyYAML installed), and
+/// fall back to `python3` on PATH when it isn't present.
+fn python_interpreter() -> PathBuf {
+    let venv_python = PathBuf::from(".venv/bin/python");
+    if venv_python.is_file() {
+        venv_python
+    } else {
+        PathBuf::from("python3")
+    }
 }
 
 fn init_logging(verbosity: u8) {
@@ -302,7 +319,22 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     let aggregate_path = args.output.join("report_aggregate.json");
     report::generate_aggregate_report(&report, &aggregate_path)
         .context("Failed to generate aggregate report")?;
-    
+
+    // Optionally find blueprints affected by the deprecated NIM list
+    if args.check_deprecation {
+        info!("Checking for blueprints affected by deprecated NIMs...");
+        let python = python_interpreter();
+        let status = Command::new(&python)
+            .arg("scripts/find_deprecated_blueprints.py")
+            .arg("--output")
+            .arg(&args.output)
+            .status()
+            .context("Failed to run deprecation check script")?;
+        if !status.success() {
+            bail!("Deprecation check script failed");
+        }
+    }
+
     // Print summary
     report::print_summary(&report);
     
@@ -378,12 +410,12 @@ fn run_query_local_nim(args: LocalNimQueryArgs) -> Result<()> {
     
     // Query the image
     let result = client.query_local_nim(&image_url)?;
-    
+
     // Output as JSON
     let json = serde_json::to_string_pretty(&result)
         .context("Failed to serialize result to JSON")?;
-    
+
     println!("{}", json);
-    
+
     Ok(())
 }
