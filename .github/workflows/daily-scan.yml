@@ -65,10 +65,9 @@ jobs:
 
       - name: Run daily NIM scan (refresh repos)
         env:
-          # Optional secrets — only exported when actually set, so empty
-          # values are never injected into the scanner.
           NVIDIA_API_KEY: ${{ secrets.CI_NVIDIA_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+          GIT_LFS_SKIP_SMUDGE: 1  # skip LFS file download during clone
         run: |
           ./target/release/nim-usage-scanner scan -c config/repos.yaml \
             --refresh-repos --workdir .repo-cache --keep-repos --jobs 4
