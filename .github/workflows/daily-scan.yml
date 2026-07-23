@@ -8,7 +8,7 @@ run-name: "Daily Scan - #${{ github.run_number }}"
 # - CI_NVIDIA_API_KEY: for querying Blueprints information from NVIDIA NGC
 # - CI_GITHUB_TOKEN: for fetching repository metadata and cloning repositories
 # Optional secrets:
-# - SLACK_WEBHOOK_URL: for sending notifications to Slack
+# - CI_SLACK_BOT_OAUTH_TOKEN: for sending notifications to Slack
 
 # Builds the scanner, refreshes the blueprint list from the Build API, then runs
 # a single scan against the refreshed list. The refreshed config and reports are
@@ -24,6 +24,10 @@ on:
         description: 'Send the Slack notification even when nothing changed'
         type: boolean
         default: false
+      slack_channel:
+        description: 'Channel name/ID, or a user ID (U...) to DM yourself when testing'
+        type: string
+        default: 'vrdc-bpqa-monitoring'
 
 permissions:
   contents: read
@@ -40,6 +44,7 @@ jobs:
     env:
       RUST_LOG: info
       ALWAYS_SEND_SLACK: ${{ github.event.inputs.always_send_slack || 'false' }}
+      SLACK_CHANNEL: ${{ github.event.inputs.slack_channel || 'vrdc-bpqa-monitoring' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -94,14 +99,22 @@ jobs:
         if: always() && (steps.summary.outputs.color != 'good' || env.ALWAYS_SEND_SLACK == 'true')
         continue-on-error: true
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.CI_SLACK_WEBHOOK_VRDC_BPQA_MONITORING_CHANNEL }}
+          SLACK_BOT_OAUTH_TOKEN: ${{ secrets.CI_SLACK_BOT_OAUTH_TOKEN }}
         run: |
-          if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "SLACK_WEBHOOK_URL not set; skipping Slack notification."
+          if [ -z "$SLACK_BOT_OAUTH_TOKEN" ]; then
+            echo "SLACK_BOT_OAUTH_TOKEN not set; skipping Slack notification."
             exit 0
           fi
-          curl -sSf -X POST -H 'Content-type: application/json' \
-            --data @output/slack-message.json "$SLACK_WEBHOOK_URL"
+          payload=$(jq --arg ch "$SLACK_CHANNEL" '. + {channel: $ch}' output/slack-message.json)
+          resp=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_BOT_OAUTH_TOKEN" \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data "$payload")
+          if [ "$(echo "$resp" | jq -r '.ok')" = "true" ]; then
+            echo "Slack message sent to ${SLACK_CHANNEL}."
+          else
+            echo "Slack error: $(echo "$resp" | jq -r '.error // "unknown"')"
+          fi
 
       - name: Upload binary, config, and reports
         if: always()
