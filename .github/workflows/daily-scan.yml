@@ -47,19 +47,6 @@ jobs:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
 
-      # Persist the cloned repositories between runs. With --keep-repos the
-      # scanner reuses existing clones via `git fetch`/`git pull` instead of a
-      # full re-clone, so a warm cache makes the scan much faster. The run_id
-      # key never hits exactly, so every run saves a fresh, updated snapshot;
-      # restore-keys pulls in the most recent previous cache.
-      - name: Cache cloned repos
-        uses: actions/cache@v4
-        with:
-          path: .repo-cache
-          key: nim-repo-cache-${{ github.run_id }}
-          restore-keys: |
-            nim-repo-cache-
-
       - name: Build (release)
         run: cargo build --release
 
@@ -70,7 +57,7 @@ jobs:
           GIT_LFS_SKIP_SMUDGE: 1  # skip LFS file download during clone
         run: |
           ./target/release/nim-usage-scanner scan -c config/repos.yaml \
-            --refresh-repos --workdir .repo-cache --keep-repos --jobs 4
+            --refresh-repos --jobs 4
 
       - name: Upload binary, config, and reports
         if: always()
