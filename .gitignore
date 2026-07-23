@@ -32,6 +32,9 @@ temp/
 .env.local
 .env.*.local
 
+# act secrets file (local workflow testing — contains API keys)
+.secrets
+
 # Log files
 *.log
 logs/
@@ -46,3 +49,5 @@ Thumbs.db
 
 # Cloned repositories (temporary)
 repos/
+.repo-cache/
+scripts/__pycache__/generate_repos_from_ngc.cpython-312.pyc

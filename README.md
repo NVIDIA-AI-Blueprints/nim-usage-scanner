@@ -47,6 +47,7 @@ export GITHUB_TOKEN="ghp_xxx"
 # Use a persistent workdir and keep repos after scan (recommended for repeated runs)
 # First run: clones into /tmp/blueprint-scan. Second and later runs: reuses existing dirs and pulls latest (no full clone).
 ./target/release/nim-usage-scanner scan -c config/repos.yaml --workdir /tmp/blueprint-scan --keep-repos --jobs 4
+# If a repo fails to clone with a Git LFS "smudge filter" error, prefix GIT_LFS_SKIP_SMUDGE=1 (see Troubleshooting)
 # Add --refresh-repos only when you want to regenerate repos.yaml from Build Page before scanning
 
 # Output will be in ./output/report.json, ./output/report.csv, and ./output/report_aggregate.json
@@ -111,6 +112,18 @@ When you run with `--refresh-repos`, the scanner first overwrites `repos.yaml` w
 - Same format as `repos.yaml` (`version`, `defaults`, `repos`). Repos are merged by `name`; duplicates (same name as in NGC list) are skipped so only extra repos are added.
 - Copy from `config/repos.githubonly.yaml.example` and add your entries under `repos:`.
 
+### Ignored repos (repos.ignored.yaml)
+
+Put repository names in **`repos.ignored.yaml`** next to your main config to exclude them from both repository refresh and scanning. Names are matched case-insensitively against the `name` field in `repos.yaml`.
+
+```yaml
+version: "1.0"
+repos:
+  - NVIDIA-AI-Blueprints/example-repo
+```
+
+When `--refresh-repos` is used, ignored repos are removed after the NGC and `repos.githubonly.yaml` lists are merged. The ignore list is also applied at scan time, so it works without refreshing and prevents ignored entries already present in `repos.yaml` from being scanned.
+
 ## Commands
 
 ### `scan` - Scan Repositories
@@ -126,7 +139,7 @@ nim-usage-scanner scan [OPTIONS] -c <CONFIG> [--ngc-api-key <KEY>] [--github-tok
 | `-w, --workdir` | Working directory for cloning repos (optional; uses temp dir if omitted) |
 | `--keep-repos` | Keep cloned repositories after scanning; with `--workdir`, next run reuses and pulls instead of cloning (default: false) |
 | `-j, --jobs` | Maximum number of parallel jobs (optional) |
-| `--refresh-repos` | Regenerate repos.yaml from Build Page, then merge repos from repos.githubonly.yaml (same dir as config) (default: false) |
+| `--refresh-repos` | Regenerate repos.yaml from Build Page, merge repos from repos.githubonly.yaml, then remove repos from repos.ignored.yaml (same dir as config) (default: false) |
 | `--ngc-api-key` | NVIDIA API Key (or use `NVIDIA_API_KEY` env var, optional) |
 | `--github-token` | GitHub Token (or use `GITHUB_TOKEN` env var, optional) |
 | `-v, --verbose` | Increase logging verbosity |
@@ -267,6 +280,42 @@ source_code,hosted_nim,NVIDIA/Example,src/main.py,42,,,,https://ai.api.nvidia.co
 | `NVIDIA_API_KEY` | NGC API Key (optional; used for tag resolution and query enrichment) |
 | `GITHUB_TOKEN` | GitHub Token (optional; required only for cloning private repositories) |
 | `RUST_LOG` | Log level: `debug`, `info`, `warn`, `error` |
+| `GIT_LFS_SKIP_SMUDGE` | Set to `1` to skip Git LFS downloads when cloning. Needed for LFS-backed repos whose LFS objects your token can't access (see [Troubleshooting](#troubleshooting)); the scanner doesn't need LFS content. |
+
+## Troubleshooting
+
+### Clone fails with `smudge filter lfs failed`
+
+**Symptom** — a repository fails to clone with an error like:
+
+```
+Smudge error: Error downloading images/hosting_options.png: batch response: Resource not accessible by personal access token
+error: external filter 'git-lfs filter-process' failed
+fatal: images/hosting_options.png: smudge filter lfs failed
+warning: Clone succeeded, but checkout failed.
+```
+
+**Cause** — the repository stores binary assets (images, models, etc.) in **Git LFS**. The git
+history clones fine, but during checkout `git` runs the LFS *smudge* filter, which calls GitHub's
+LFS batch API using your `GITHUB_TOKEN`. GitHub rejects it with *"Resource not accessible by
+personal access token"* when the token isn't authorized for that repo's LFS objects — a common
+limitation of **fine-grained PATs** and SSO/SAML-gated organization repos, whose tokens can read
+git objects but not LFS objects. The smudge filter's failure makes `git clone` exit non-zero, so
+the scanner marks the repository as failed even though the source it needs was already downloaded.
+
+**Fix** — the scanner only reads source text for NIM references and never needs LFS blob content,
+so skip LFS downloads by setting `GIT_LFS_SKIP_SMUDGE=1` when scanning:
+
+```bash
+GIT_LFS_SKIP_SMUDGE=1 GITHUB_TOKEN="$GITHUB_TOKEN" \
+  ./target/release/nim-usage-scanner scan -c config/repos.yaml \
+  --workdir /tmp/blueprint-scan --keep-repos --jobs 4
+```
+
+LFS-tracked files are then left as small pointer text files, which is fine for scanning.
+
+> **Note:** If a previous failed run left a partial `<org>_<repo>` directory in your `--workdir`,
+> delete it first — otherwise the `--keep-repos` reuse path will try to update the broken checkout.
 
 ## License
 

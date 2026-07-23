@@ -9,6 +9,16 @@ use crate::models::{Config, RepoConfig};
 
 /// Filename for optional extra repos merged when using `--refresh-repos`.
 pub const EXTRA_REPOS_FILENAME: &str = "repos.githubonly.yaml";
+/// Filename for repos excluded from refresh and scanning.
+pub const IGNORED_REPOS_FILENAME: &str = "repos.ignored.yaml";
+
+#[derive(Debug, serde::Deserialize)]
+struct IgnoredReposConfig {
+    #[allow(dead_code)]
+    version: Option<String>,
+    #[serde(default)]
+    repos: Vec<String>,
+}
 
 /// Load configuration from a YAML file
 ///
@@ -70,6 +80,74 @@ pub fn merge_extra_repos<P: AsRef<Path>>(path: P) -> Result<()> {
         path.display()
     );
     Ok(())
+}
+
+/// Load ignored repository names from `repos.ignored.yaml` next to the main
+/// config. Missing files are treated as an empty ignore list.
+pub fn load_ignored_repo_names<P: AsRef<Path>>(path: P) -> Result<HashSet<String>> {
+    let ignored_path = path.as_ref().with_file_name(IGNORED_REPOS_FILENAME);
+    if !ignored_path.exists() {
+        return Ok(HashSet::new());
+    }
+
+    let content = std::fs::read_to_string(&ignored_path)
+        .with_context(|| format!("Failed to read ignored repos file: {}", ignored_path.display()))?;
+    let ignored: IgnoredReposConfig = serde_yaml::from_str(&content)
+        .with_context(|| format!("Failed to parse ignored repos file: {}", ignored_path.display()))?;
+
+    Ok(ignored
+        .repos
+        .into_iter()
+        .map(|name| name.trim().trim_end_matches(".git").to_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect())
+}
+
+/// Remove repos listed in `repos.ignored.yaml` from an in-memory repo list.
+pub fn filter_ignored(
+    repos: Vec<RepoConfig>,
+    ignored_names: &HashSet<String>,
+) -> Vec<RepoConfig> {
+    repos
+        .into_iter()
+        .filter(|repo| {
+            !ignored_names.contains(
+                &repo.name
+                    .trim()
+                    .trim_end_matches(".git")
+                    .to_lowercase(),
+            )
+        })
+        .collect()
+}
+
+/// Remove ignored repos from the main config and persist the result. This is
+/// used after refresh so ignored repos are not written back to `repos.yaml`.
+pub fn remove_ignored_repos<P: AsRef<Path>>(path: P) -> Result<usize> {
+    let path = path.as_ref();
+    let ignored_names = load_ignored_repo_names(path)?;
+    if ignored_names.is_empty() {
+        return Ok(0);
+    }
+
+    let mut config = load_config(path)?;
+    let original_count = config.repos.len();
+    config.repos = filter_ignored(config.repos, &ignored_names);
+    let removed = original_count - config.repos.len();
+
+    if removed > 0 {
+        let yaml = serde_yaml::to_string(&config)
+            .context("Failed to serialize config after applying ignored repos")?;
+        std::fs::write(path, yaml)
+            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
+        log::info!(
+            "Removed {} ignored repo(s) from {}",
+            removed,
+            path.display()
+        );
+    }
+
+    Ok(removed)
 }
 
 /// Validation error types
@@ -322,5 +400,33 @@ mod tests {
         let filtered = filter_enabled(repos);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "enabled");
+    }
+
+    #[test]
+    fn test_filter_ignored_is_case_insensitive() {
+        let repos = vec![
+            RepoConfig {
+                name: "NVIDIA-AI-Blueprints/Example".to_string(),
+                url: "https://github.com/NVIDIA-AI-Blueprints/Example.git".to_string(),
+                branch: None,
+                depth: None,
+                enabled: true,
+            },
+            RepoConfig {
+                name: "NVIDIA/keep".to_string(),
+                url: "https://github.com/NVIDIA/keep.git".to_string(),
+                branch: None,
+                depth: None,
+                enabled: true,
+            },
+        ];
+        let ignored = HashSet::from([
+            "nvidia-ai-blueprints/example".to_string(),
+        ]);
+
+        let filtered = filter_ignored(repos, &ignored);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "NVIDIA/keep");
     }
 }
