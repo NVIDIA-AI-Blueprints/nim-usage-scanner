@@ -97,7 +97,7 @@ jobs:
           cat output/scan-summary.html >> "$GITHUB_STEP_SUMMARY"
 
       - name: Notify Slack on changes
-        if: always() && (steps.summary.outputs.color != 'good' || env.ALWAYS_SEND_SLACK == 'true')
+        if: success() && (steps.summary.outputs.color != 'good' || env.ALWAYS_SEND_SLACK == 'true')
         continue-on-error: true
         env:
           SLACK_BOT_OAUTH_TOKEN: ${{ secrets.CI_SLACK_BOT_OAUTH_TOKEN }}
@@ -113,6 +113,38 @@ jobs:
             --data "$payload")
           if [ "$(echo "$resp" | jq -r '.ok')" = "true" ]; then
             echo "Slack message sent to ${SLACK_CHANNEL}."
+          else
+            echo "Slack error: $(echo "$resp" | jq -r '.error // "unknown"')"
+          fi
+
+      - name: Notify Slack on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          SLACK_BOT_OAUTH_TOKEN: ${{ secrets.CI_SLACK_BOT_OAUTH_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$SLACK_BOT_OAUTH_TOKEN" ]; then
+            echo "SLACK_BOT_OAUTH_TOKEN not set; skipping Slack notification."
+            exit 0
+          fi
+          payload=$(jq -n \
+            --arg ch "$SLACK_CHANNEL" \
+            --arg title ":rotating_light: Daily NIM Usage Scan #${GITHUB_RUN_NUMBER} failed" \
+            --arg url "$RUN_URL" \
+            '{channel: $ch, attachments: [{
+               color: "danger",
+               title: $title,
+               title_link: $url,
+               text: ("The daily scan workflow failed. <" + $url + "|View run>"),
+               mrkdwn_in: ["text"]
+             }]}')
+          resp=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_BOT_OAUTH_TOKEN" \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data "$payload")
+          if [ "$(echo "$resp" | jq -r '.ok')" = "true" ]; then
+            echo "Slack failure alert sent to ${SLACK_CHANNEL}."
           else
             echo "Slack error: $(echo "$resp" | jq -r '.error // "unknown"')"
           fi
