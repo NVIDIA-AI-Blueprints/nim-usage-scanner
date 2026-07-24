@@ -24,6 +24,11 @@ pub enum SourceType {
 // ============================================================================
 
 /// Top-level configuration structure parsed from repos.yaml
+///
+/// Repositories are grouped into three categories. `repos_active` (active on the
+/// Build catalog) and `repos_github_only` (GitHub-only) are scanned;
+/// `repos_deprecated` (names only) is not. The `refresh_repos_config.py` script
+/// owns keeping these lists in sync with NGC.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Configuration file version (reserved for future compatibility checks)
@@ -32,8 +37,15 @@ pub struct Config {
     /// Default values for repository settings
     #[serde(default)]
     pub defaults: Defaults,
-    /// List of repositories to scan
-    pub repos: Vec<RepoConfig>,
+    /// Repositories active on the Build catalog. Scanned.
+    #[serde(default)]
+    pub repos_active: Vec<RepoConfig>,
+    /// Repositories only available on GitHub (not on Build). Scanned.
+    #[serde(default)]
+    pub repos_github_only: Vec<RepoConfig>,
+    /// Deprecated blueprint repository names. Not scanned.
+    #[serde(default)]
+    pub repos_deprecated: Vec<String>,
 }
 
 /// Default configuration values

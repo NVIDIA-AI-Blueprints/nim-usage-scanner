@@ -1,0 +1,3 @@
+# Python dependencies for the helper scripts in scripts/ (Python 3.12+).
+# Install: PYENV_VERSION=3.12.13 python3 -m pip install -r requirements.txt
+pyyaml>=6.0

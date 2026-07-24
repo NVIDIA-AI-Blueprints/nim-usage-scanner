@@ -152,7 +152,7 @@ fn is_doc_like_file(path: &Path) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Build API catalog (blueprints): scripts/generate_repos_from_ngc.py uses
+// Build API catalog (blueprints): scripts/refresh_repos_config.py uses
 // /v2/blueprints/ and /v2/blueprints/{orgName}/{name}/spec for --refresh-repos.
 // This constant is the legacy resources API URL (kept for reference). Do not use
 // for publisher whitelist; use PUBLISHER_FILTERS_API_URL below.

@@ -107,7 +107,7 @@ Define the following structs for parsing `repos.yaml`:
 
 | Struct | Fields | Description |
 |--------|--------|-------------|
-| `Config` | `version`, `defaults`, `repos` | Top-level configuration |
+| `Config` | `version`, `defaults`, `repos_active`, `repos_github_only`, `repos_deprecated` | Top-level configuration. `repos_active` + `repos_github_only` are scanned; `repos_deprecated` (names only) is not |
 | `Defaults` | `branch`, `depth` | Default value configuration |
 | `RepoConfig` | `name`, `url`, `branch`, `depth`, `enabled` | Single repository configuration |
 
@@ -591,16 +591,23 @@ defaults:
   branch: main
   depth: 1
 
-repos:
+# Active on Build and not deprecated. Scanned.
+repos_active:
   - name: NVIDIA/GenerativeAIExamples
     url: https://github.com/NVIDIA/GenerativeAIExamples.git
-    
-  - name: NVIDIA/workbench-example-hybrid-rag
-    url: https://github.com/NVIDIA/workbench-example-hybrid-rag.git
-    
+
   - name: NVIDIA/nemo-guardrails
     url: https://github.com/NVIDIA/NeMo-Guardrails.git
     branch: develop
+
+# Only on GitHub (not returned by the Build API). Scanned.
+repos_github_only:
+  - name: NVIDIA/workbench-example-hybrid-rag
+    url: https://github.com/NVIDIA/workbench-example-hybrid-rag.git
+
+# Deprecated on Build (DEPRECATION attribute). NOT scanned.
+repos_deprecated:
+  - NVIDIA-AI-Blueprints/llm-router
 ```
 
 ---

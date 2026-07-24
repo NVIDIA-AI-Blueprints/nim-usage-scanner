@@ -77,6 +77,11 @@ struct ScanArgs {
     /// Regenerate repos.yaml from Build Page before scanning
     #[arg(long, default_value = "false")]
     refresh_repos: bool,
+
+    /// After scanning, find blueprints that reference a deprecated NIM
+    /// (runs scripts/find_deprecated_blueprints.py against config/nims.deprecated.yaml)
+    #[arg(long, default_value = "false")]
+    check_deprecation: bool,
 }
 
 /// Arguments for the query subcommand
@@ -129,6 +134,18 @@ struct LocalNimQueryArgs {
     verbose: u8,
 }
 
+/// Pick the Python interpreter for helper scripts. Prefer the repo virtualenv
+/// (`.venv`, which has the scripts' dependencies like PyYAML installed), and
+/// fall back to `python3` on PATH when it isn't present.
+fn python_interpreter() -> PathBuf {
+    let venv_python = PathBuf::from(".venv/bin/python");
+    if venv_python.is_file() {
+        venv_python
+    } else {
+        PathBuf::from("python3")
+    }
+}
+
 fn init_logging(verbosity: u8) {
     let level = match verbosity {
         0 => LevelFilter::Warn,
@@ -171,20 +188,18 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     }
     
     if args.refresh_repos {
-        info!("Refreshing repos from Build Page...");
-        let status = Command::new("python3")
-            .arg("scripts/generate_repos_from_ngc.py")
-            .arg("--output")
+        info!("Refreshing repos config from Build Page...");
+        let python = python_interpreter();
+        let status = Command::new(&python)
+            .arg("scripts/refresh_repos_config.py")
+            .arg("--config")
             .arg(&args.config)
+            .arg("--in-place")
             .status()
-            .context("Failed to run Build Page repo generation script")?;
+            .context("Failed to run repos refresh script")?;
         if !status.success() {
-            bail!("Build Page repo generation script failed");
+            bail!("Repos refresh script failed");
         }
-        config::merge_extra_repos(&args.config)
-            .context("Failed to merge extra repos from repos.githubonly.yaml")?;
-        config::remove_ignored_repos(&args.config)
-            .context("Failed to remove repos from repos.ignored.yaml")?;
     }
 
     // Load and validate configuration
@@ -195,19 +210,16 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     config::validate_config(&config)
         .context("Configuration validation failed")?;
     
-    // Apply defaults and filter enabled repos
+    // Apply defaults and filter enabled repos (scans repos_active + repos_github_only)
     let repos = config::apply_defaults(&config);
     let repos = config::filter_enabled(repos);
-    let ignored_names = config::load_ignored_repo_names(&args.config)
-        .context("Failed to load repos.ignored.yaml")?;
-    let repos = config::filter_ignored(repos, &ignored_names);
-    
+
     if repos.is_empty() {
-        warn!("No enabled, non-ignored repositories found in configuration");
+        warn!("No enabled repositories found in configuration");
         return Ok(());
     }
-    
-    info!("Found {} enabled, non-ignored repositories to scan", repos.len());
+
+    info!("Found {} enabled repositories to scan", repos.len());
     
     // Create working directory
     let temp_dir: Option<TempDir>;
@@ -302,7 +314,22 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     let aggregate_path = args.output.join("report_aggregate.json");
     report::generate_aggregate_report(&report, &aggregate_path)
         .context("Failed to generate aggregate report")?;
-    
+
+    // Optionally find blueprints affected by the deprecated NIM list
+    if args.check_deprecation {
+        info!("Checking for blueprints affected by deprecated NIMs...");
+        let python = python_interpreter();
+        let status = Command::new(&python)
+            .arg("scripts/find_deprecated_blueprints.py")
+            .arg("--output")
+            .arg(&args.output)
+            .status()
+            .context("Failed to run deprecation check script")?;
+        if !status.success() {
+            bail!("Deprecation check script failed");
+        }
+    }
+
     // Print summary
     report::print_summary(&report);
     
@@ -378,12 +405,12 @@ fn run_query_local_nim(args: LocalNimQueryArgs) -> Result<()> {
     
     // Query the image
     let result = client.query_local_nim(&image_url)?;
-    
+
     // Output as JSON
     let json = serde_json::to_string_pretty(&result)
         .context("Failed to serialize result to JSON")?;
-    
+
     println!("{}", json);
-    
+
     Ok(())
 }

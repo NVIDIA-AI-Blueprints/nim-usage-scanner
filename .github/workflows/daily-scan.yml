@@ -7,14 +7,27 @@ run-name: "Daily Scan - #${{ github.run_number }}"
 # Required secrets:
 # - CI_NVIDIA_API_KEY: for querying Blueprints information from NVIDIA NGC
 # - CI_GITHUB_TOKEN: for fetching repository metadata and cloning repositories
+# Optional secrets:
+# - CI_SLACK_BOT_OAUTH_TOKEN: for sending notifications to Slack
 
-# Builds the scanner and runs it once a day against the refreshed blueprint
-# list, then stores the built binary, config, and reports as build artifacts.
+# Builds the scanner, refreshes the blueprint list from the Build API, then runs
+# a single scan against the refreshed list. The refreshed config and reports are
+# stored as artifacts, and a summary (repos added/removed/deprecated plus
+# blueprints affected by deprecated NIMs) is written to the run's job summary.
 on:
   schedule:
     # 06:00 UTC every day
     - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      always_send_slack:
+        description: 'Send the Slack notification even when nothing changed'
+        type: boolean
+        default: false
+      slack_channel:
+        description: 'Channel name/ID, or a user ID (U...) to DM yourself when testing'
+        type: string
+        default: 'vrdc-bpqa-monitoring'
 
 permissions:
   contents: read
@@ -30,48 +43,78 @@ jobs:
     timeout-minutes: 60
     env:
       RUST_LOG: info
+      ALWAYS_SEND_SLACK: ${{ github.event.inputs.always_send_slack || 'false' }}
+      SLACK_CHANNEL: ${{ github.event.inputs.slack_channel || 'vrdc-bpqa-monitoring' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Python is needed for `--refresh-repos`, whose generator script
-      # (scripts/generate_repos_from_ngc.py) uses 3.10+ syntax.
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      # Pinned SHA is the org-allowlisted release of setup-rust-toolchain (the
-      # maintained successor to dtolnay/rust-toolchain). It also caches cargo
-      # build artifacts between runs, so no separate rust-cache step is needed.
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      # Pinned SHA is the org-allowlisted release of setup-rust-toolchain
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@150fca883cd4034361b621bd4e6a9d34e5143606
-
-      # Persist the cloned repositories between runs. With --keep-repos the
-      # scanner reuses existing clones via `git fetch`/`git pull` instead of a
-      # full re-clone, so a warm cache makes the scan much faster. The run_id
-      # key never hits exactly, so every run saves a fresh, updated snapshot;
-      # restore-keys pulls in the most recent previous cache.
-      - name: Cache cloned repos
-        uses: actions/cache@v4
-        with:
-          path: .repo-cache
-          key: nim-repo-cache-${{ github.run_id }}
-          restore-keys: |
-            nim-repo-cache-
 
       - name: Build (release)
         run: cargo build --release
 
-      - name: Run daily NIM scan (refresh repos)
+      - name: Refresh repos config
+        run: |
+          python scripts/refresh_repos_config.py \
+            --config config/repos.yaml \
+            --output output/repos-refreshed.yaml \
+            --summary-json output/repos_refresh_summary.json
+
+      - name: Run NIM scan
         env:
-          # Optional secrets — only exported when actually set, so empty
-          # values are never injected into the scanner.
           NVIDIA_API_KEY: ${{ secrets.CI_NVIDIA_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+          GIT_LFS_SKIP_SMUDGE: 1  # skip LFS file download during clone
         run: |
-          ./target/release/nim-usage-scanner scan -c config/repos.yaml \
-            --refresh-repos --workdir .repo-cache --keep-repos --jobs 4
+          ./target/release/nim-usage-scanner scan -c output/repos-refreshed.yaml \
+            -o output --jobs 4 --check-deprecation
+
+      - name: Build scan summary
+        id: summary
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python .github/workflows/scripts/build-scan-summary.py \
+            --refresh-summary output/repos_refresh_summary.json \
+            --affected output/deprecation_affected_blueprints.json \
+            --run-number "${GITHUB_RUN_NUMBER}" \
+            --run-url "${RUN_URL}" \
+            --html-out output/scan-summary.html \
+            --slack-out output/slack-message.json
+          cat output/scan-summary.html >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Notify Slack on changes
+        if: always() && (steps.summary.outputs.color != 'good' || env.ALWAYS_SEND_SLACK == 'true')
+        continue-on-error: true
+        env:
+          SLACK_BOT_OAUTH_TOKEN: ${{ secrets.CI_SLACK_BOT_OAUTH_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_OAUTH_TOKEN" ]; then
+            echo "SLACK_BOT_OAUTH_TOKEN not set; skipping Slack notification."
+            exit 0
+          fi
+          payload=$(jq --arg ch "$SLACK_CHANNEL" '. + {channel: $ch}' output/slack-message.json)
+          resp=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+            -H "Authorization: Bearer $SLACK_BOT_OAUTH_TOKEN" \
+            -H 'Content-type: application/json; charset=utf-8' \
+            --data "$payload")
+          if [ "$(echo "$resp" | jq -r '.ok')" = "true" ]; then
+            echo "Slack message sent to ${SLACK_CHANNEL}."
+          else
+            echo "Slack error: $(echo "$resp" | jq -r '.error // "unknown"')"
+          fi
 
       - name: Upload binary, config, and reports
         if: always()
@@ -81,7 +124,6 @@ jobs:
           path: |
             target/release/nim-usage-scanner
             config/
-            !config/repos.githubonly.yaml.example
             output/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30

@@ -610,7 +610,7 @@ dist/
 ### 6.1 repos.yaml Format
 
 ```yaml
-# repos.yaml - Configuration for repositories to scan
+# repos.yaml - Configuration for repositories to scan, grouped by category.
 version: "1.0"
 
 # Default configuration (can be overridden by individual repos)
@@ -618,19 +618,25 @@ defaults:
   branch: main
   depth: 1
 
-# Repository list
-repos:
+# Active on Build and not deprecated. Scanned.
+repos_active:
   - name: NVIDIA/GenerativeAIExamples
     url: https://github.com/NVIDIA/GenerativeAIExamples.git
     branch: main
-    
-  - name: NVIDIA/workbench-example-hybrid-rag
-    url: https://github.com/NVIDIA/workbench-example-hybrid-rag.git
-    branch: main
-    
+
   - name: NVIDIA/blueprint-streaming-rag
     url: https://github.com/NVIDIA/blueprint-streaming-rag.git
     # Uses branch from defaults
+
+# Only on GitHub (not returned by the Build API). Scanned.
+repos_github_only:
+  - name: NVIDIA/workbench-example-hybrid-rag
+    url: https://github.com/NVIDIA/workbench-example-hybrid-rag.git
+    branch: main
+
+# Deprecated on Build (DEPRECATION attribute). NOT scanned. Names only.
+repos_deprecated:
+  - NVIDIA-AI-Blueprints/llm-router
 ```
 
 ### 6.2 Configuration Field Description
