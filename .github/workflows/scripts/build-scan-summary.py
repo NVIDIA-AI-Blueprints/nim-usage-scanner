@@ -14,7 +14,9 @@ and writes:
 
 Slack attachment color (also emitted as the ``color`` step output when
 ``$GITHUB_OUTPUT`` is set, for the workflow to decide whether to notify):
-  - danger  : any blueprint is affected by a deprecated NIM
+  - danger  : a blueprint is affected by a deprecated NIM (with
+              ``--affected-local-nims-safe``, only a deprecated *hosted* NIM;
+              blueprints affected only by deprecated *local* NIMs count as good)
   - warning : the repo lists changed (active added/removed, or newly deprecated)
   - good    : neither of the above
 
@@ -166,6 +168,12 @@ def main() -> None:
     parser.add_argument("--run-url", default="")
     parser.add_argument("--html-out", default="output/scan-summary.html")
     parser.add_argument("--slack-out", default="output/slack-message.json")
+    parser.add_argument(
+        "--affected-local-nims-safe",
+        action="store_true",
+        help="Treat blueprints affected only by deprecated LOCAL NIMs as safe "
+             "(color 'good') instead of 'danger'.",
+    )
     args = parser.parse_args()
 
     summary = load_json(args.refresh_summary, None)
@@ -208,7 +216,11 @@ def main() -> None:
     deprecated_after = counts.get("repos_deprecated_after", "?")
 
     has_changes = bool(added_active or removed_active or added_deprecated)
-    if affected:
+    if args.affected_local_nims_safe:
+        escalating = entries_with(affected, "affected_hosted_nims")
+    else:
+        escalating = affected
+    if escalating:
         color = "danger"
     elif has_changes:
         color = "warning"

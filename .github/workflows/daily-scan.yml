@@ -89,6 +89,7 @@ jobs:
           python .github/workflows/scripts/build-scan-summary.py \
             --refresh-summary output/repos_refresh_summary.json \
             --affected output/deprecation_affected_blueprints.json \
+            --affected-local-nims-safe \
             --run-number "${GITHUB_RUN_NUMBER}" \
             --run-url "${RUN_URL}" \
             --html-out output/scan-summary.html \
