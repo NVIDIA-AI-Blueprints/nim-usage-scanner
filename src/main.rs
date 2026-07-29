@@ -79,7 +79,7 @@ struct ScanArgs {
     refresh_repos: bool,
 
     /// After scanning, find blueprints that reference a deprecated NIM
-    /// (runs scripts/find_deprecated_blueprints.py against config/nims.deprecated.yaml)
+    /// (runs scripts/find_blueprints_affected_by_deprecation.py against config/nims.deprecated.yaml)
     #[arg(long, default_value = "false")]
     check_deprecation: bool,
 }
@@ -320,9 +320,11 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         info!("Checking for blueprints affected by deprecated NIMs...");
         let python = python_interpreter();
         let status = Command::new(&python)
-            .arg("scripts/find_deprecated_blueprints.py")
+            .arg("scripts/find_blueprints_affected_by_deprecation.py")
             .arg("--output")
             .arg(&args.output)
+            .arg("--config")
+            .arg(&args.config)
             .status()
             .context("Failed to run deprecation check script")?;
         if !status.success() {

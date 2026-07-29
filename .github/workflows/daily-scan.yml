@@ -28,6 +28,10 @@ on:
         description: 'Channel name/ID, or a user ID (U...) to DM yourself when testing'
         type: string
         default: 'vrdc-bpqa-monitoring'
+      ignored_blueprints:
+        description: 'Comma-separated blueprint names or repos to ignore in the scan summary'
+        type: string
+        default: 'NVIDIA/NemoClaw'
 
 permissions:
   contents: read
@@ -45,6 +49,7 @@ jobs:
       RUST_LOG: info
       ALWAYS_SEND_SLACK: ${{ github.event.inputs.always_send_slack || 'false' }}
       SLACK_CHANNEL: ${{ github.event.inputs.slack_channel || 'vrdc-bpqa-monitoring' }}
+      IGNORED_BLUEPRINTS: ${{ github.event.inputs.ignored_blueprints || 'NVIDIA/NemoClaw' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -90,6 +95,7 @@ jobs:
             --refresh-summary output/repos_refresh_summary.json \
             --affected output/deprecation_affected_blueprints.json \
             --affected-local-nims-safe \
+            --ignore-blueprints "${IGNORED_BLUEPRINTS}" \
             --run-number "${GITHUB_RUN_NUMBER}" \
             --run-url "${RUN_URL}" \
             --html-out output/scan-summary.html \
