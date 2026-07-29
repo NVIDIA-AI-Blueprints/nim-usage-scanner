@@ -13,137 +13,188 @@ repos_active:
   # Enterprise Blueprints
   - name: NVIDIA-AI-Blueprints/aiq
     url: https://github.com/NVIDIA-AI-Blueprints/aiq.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: NVIDIA AI-Q Blueprint for intelligent agents
+        url: https://build.nvidia.com/nvidia/aiq
+        category: Enterprise Blueprint
   - name: NVIDIA-AI-Blueprints/rag
     url: https://github.com/NVIDIA-AI-Blueprints/rag.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Build an Enterprise RAG Pipeline Blueprint
+        url: https://build.nvidia.com/nvidia/build-an-enterprise-rag-pipeline
+        category: Enterprise Blueprint
   - name: NVIDIA-AI-Blueprints/video-search-and-summarization
     url: https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Build a Video Search and Summarization (VSS) Agent
+        url: https://build.nvidia.com/nvidia/video-search-and-summarization
+        category: Enterprise Blueprint
   - name: NVIDIA-BioNeMo-blueprints/generative-protein-binder-design
     url: https://github.com/NVIDIA-BioNeMo-blueprints/generative-protein-binder-design.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Build A Generative Protein Binder Design Pipeline
+        url: https://build.nvidia.com/nvidia/protein-binder-design-for-drug-discovery
+        category: Enterprise Blueprint
   - name: NVIDIA-NIM-Agent-Blueprints/generative-virtual-screening
     url: https://github.com/NVIDIA-NIM-Agent-Blueprints/generative-virtual-screening.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Build A Generative Virtual Screening Pipeline
+        url: https://build.nvidia.com/nvidia/generative-virtual-screening-for-drug-discovery
+        category: Enterprise Blueprint
   - name: NVIDIA-Omniverse-blueprints/cosmos-dataset-search
     url: https://github.com/NVIDIA-Omniverse-blueprints/cosmos-dataset-search.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Cosmos Dataset Search
+        url: https://build.nvidia.com/nvidia/cosmos-dataset-search
+        category: Enterprise Blueprint
   - name: NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation
     url: https://github.com/NVIDIA-Omniverse-blueprints/digital-twins-for-fluid-simulation.git
-    branch: main
-    enabled: true
-  - name: NVIDIA-Omniverse-blueprints/earth2-weather-analytics
-    url: https://github.com/NVIDIA-Omniverse-blueprints/earth2-weather-analytics.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Build a Digital Twin for Interactive Fluid Simulation
+        url: https://build.nvidia.com/nvidia/digital-twins-for-fluid-simulation
+        category: Enterprise Blueprint
   - name: NVIDIA-Omniverse-blueprints/omniverse-dsx-blueprint-for-ai-factories
     url: https://github.com/NVIDIA-Omniverse-blueprints/omniverse-dsx-blueprint-for-ai-factories.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: NVIDIA Omniverse DSX Blueprint for AI Factory Digital Twins
+        url: https://build.nvidia.com/nvidia/omniverse-dsx-blueprint-for-ai-factories
+        category: Enterprise Blueprint
   - name: NVIDIA-Omniverse-blueprints/synthetic-motion-generation
     url: https://github.com/NVIDIA-Omniverse-blueprints/synthetic-motion-generation.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Synthetic Manipulation Motion Generation for Robotics
+        url: https://build.nvidia.com/nvidia/isaac-gr00t-synthetic-manipulation
+        category: Enterprise Blueprint
 
   # Developer Examples
   - name: NVIDIA-AI-Blueprints/ai-model-distillation-for-financial-data
     url: https://github.com/NVIDIA-AI-Blueprints/ai-model-distillation-for-financial-data.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: AI Model Distillation for Financial Data
+        url: https://build.nvidia.com/nvidia/ai-model-distillation-for-financial-data
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/ambient-healthcare-agents
     url: https://github.com/NVIDIA-AI-Blueprints/ambient-healthcare-agents.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Ambient Healthcare Agents
+        url: https://build.nvidia.com/nvidia/ambient-healthcare-agents
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/content-localization
     url: https://github.com/NVIDIA-AI-Blueprints/content-localization.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Content Localization
+        url: https://build.nvidia.com/nvidia/content-localization
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/Financial-Fraud-Detection
     url: https://github.com/NVIDIA-AI-Blueprints/Financial-Fraud-Detection.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Financial Fraud Detection
+        url: https://build.nvidia.com/nvidia/financial-fraud-detection
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/genomics-analysis
     url: https://github.com/NVIDIA-AI-Blueprints/genomics-analysis.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Genomic Analysis
+        url: https://build.nvidia.com/nvidia/genomics-analysis
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/Multi-Agent-Intelligent-Warehouse
     url: https://github.com/NVIDIA-AI-Blueprints/Multi-Agent-Intelligent-Warehouse.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Multi-Agent Intelligent Warehouse
+        url: https://build.nvidia.com/nvidia/multi-agent-intelligent-warehouse
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/nemotron-voice-agent
     url: https://github.com/NVIDIA-AI-Blueprints/nemotron-voice-agent.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Nemotron Voice Agent
+        url: https://build.nvidia.com/nvidia/nemotron-voice-agent
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/nsight-copilot
     url: https://github.com/NVIDIA-AI-Blueprints/nsight-copilot.git
-    branch: main
-    enabled: true
-  - name: NVIDIA-AI-Blueprints/pdf-to-podcast
-    url: https://github.com/NVIDIA-AI-Blueprints/pdf-to-podcast.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Nsight Copilot - AI Code Assistant for CUDA Development
+        url: https://build.nvidia.com/nvidia/nsight-copilot
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/quantitative-portfolio-optimization
     url: https://github.com/NVIDIA-AI-Blueprints/quantitative-portfolio-optimization.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Quantitative Portfolio Optimization
+        url: https://build.nvidia.com/nvidia/quantitative-portfolio-optimization
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/quantitative-signal-discovery-agent
     url: https://github.com/NVIDIA-AI-Blueprints/quantitative-signal-discovery-agent.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Quantitative Signal Discovery Agent
+        url: https://build.nvidia.com/nvidia/quantitative-signal-discovery-agent
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/Retail-Agentic-Commerce
     url: https://github.com/NVIDIA-AI-Blueprints/Retail-Agentic-Commerce.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Retail Agentic Commerce
+        url: https://build.nvidia.com/nvidia/retail-agentic-commerce
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/Retail-Catalog-Enrichment
     url: https://github.com/NVIDIA-AI-Blueprints/Retail-Catalog-Enrichment.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Retail Catalog Enrichment
+        url: https://build.nvidia.com/nvidia/retail-catalog-enrichment
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/retail-shopping-assistant
     url: https://github.com/NVIDIA-AI-Blueprints/retail-shopping-assistant.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Retail Shopping Assistant
+        url: https://build.nvidia.com/nvidia/retail-shopping-assistant
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/single-cell-analysis-blueprint
     url: https://github.com/NVIDIA-AI-Blueprints/single-cell-analysis-blueprint.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Single Cell Analysis
+        url: https://build.nvidia.com/nvidia/single-cell-analysis
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/streaming-data-to-rag
     url: https://github.com/NVIDIA-AI-Blueprints/streaming-data-to-rag.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Streaming Data to RAG
+        url: https://build.nvidia.com/nvidia/streaming-data-to-rag
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/transaction-foundation-model
     url: https://github.com/NVIDIA-AI-Blueprints/transaction-foundation-model.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: Build Your Own Transaction Foundation Model
+        url: https://build.nvidia.com/nvidia/build-your-own-transaction-foundation-model
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/vulnerability-analysis
     url: https://github.com/NVIDIA-AI-Blueprints/vulnerability-analysis.git
-    branch: main
     enabled: false
+    blueprints: []
 
   # Partner Examples
   - name: bubbleran/Telco-Network-Configuration
     url: https://github.com/bubbleran/Telco-Network-Configuration.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: AI Agent for Telecom Network Configuration Planning
+        url: https://build.nvidia.com/nvidia/telco-network-configuration
+        category: Partner Example
 
   # NemoClaw
   - name: NVIDIA/NemoClaw
     url: https://github.com/NVIDIA/NemoClaw.git
-    branch: main
-    enabled: true
+    blueprints:
+      - name: NemoClaw for Hermes Agent
+        url: https://build.nvidia.com/nvidia/nemoclaw-for-hermes-agent
+        category: NemoClaw
+      - name: NemoClaw for LangChain Deep Agents Code
+        url: https://build.nvidia.com/nvidia/nemoclaw-for-langchain-deep-agents-code
+        category: NemoClaw
+      - name: NemoClaw for OpenClaw
+        url: https://build.nvidia.com/nvidia/nemoclaw-for-openclaw
+        category: NemoClaw
 
 # Only on GitHub (not returned by the Build API). Scanned.
 repos_github_only:
   - name: NVIDIA/Mosaic
     url: https://github.com/NVIDIA/Mosaic
-    branch: main
-    enabled: true
+    blueprints: []
 
 # Deprecated on Build (DEPRECATION attribute). NOT scanned.
 repos_deprecated:
@@ -154,7 +205,9 @@ repos_deprecated:
   - NVIDIA-AI-Blueprints/bring-llms-to-nim
   - NVIDIA-AI-Blueprints/data-flywheel
   - NVIDIA-AI-Blueprints/llm-router
+  - NVIDIA-AI-Blueprints/pdf-to-podcast
   - NVIDIA-AI-Blueprints/safety-for-agentic-ai
+  - NVIDIA-Omniverse-blueprints/earth2-weather-analytics
   - NVIDIA/data-enrichment-workflow
   - NVIDIA/metropolis-sdg-smart-cities
   - VIAVI-CTOO/es-blueprint-rsg

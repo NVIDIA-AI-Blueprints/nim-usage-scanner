@@ -23,11 +23,15 @@ on:
       always_send_slack:
         description: 'Send the Slack notification even when nothing changed'
         type: boolean
-        default: false
+        default: true
       slack_channel:
         description: 'Channel name/ID, or a user ID (U...) to DM yourself when testing'
         type: string
         default: 'vrdc-bpqa-monitoring'
+      ignored_blueprints:
+        description: 'Comma-separated blueprint names or repos to ignore in the scan summary'
+        type: string
+        default: 'NVIDIA/NemoClaw'
 
 permissions:
   contents: read
@@ -43,8 +47,10 @@ jobs:
     timeout-minutes: 60
     env:
       RUST_LOG: info
-      ALWAYS_SEND_SLACK: ${{ github.event.inputs.always_send_slack || 'false' }}
+      ALWAYS_SEND_SLACK: ${{ github.event.inputs.always_send_slack || 'true' }}
       SLACK_CHANNEL: ${{ github.event.inputs.slack_channel || 'vrdc-bpqa-monitoring' }}
+      IGNORED_BLUEPRINTS: ${{ github.event.inputs.ignored_blueprints || 'NVIDIA/NemoClaw' }}
+      SLACK_OWNER: 'U0B3BBFQVSR'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -90,63 +96,63 @@ jobs:
             --refresh-summary output/repos_refresh_summary.json \
             --affected output/deprecation_affected_blueprints.json \
             --affected-local-nims-safe \
+            --ignore-blueprints "${IGNORED_BLUEPRINTS}" \
             --run-number "${GITHUB_RUN_NUMBER}" \
             --run-url "${RUN_URL}" \
             --html-out output/scan-summary.html \
             --slack-out output/slack-message.json
           cat output/scan-summary.html >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Notify Slack on changes
-        if: success() && (steps.summary.outputs.color != 'good' || env.ALWAYS_SEND_SLACK == 'true')
+      - name: Notify Slack
+        if: ${{ !cancelled() }}
         continue-on-error: true
         env:
           SLACK_BOT_OAUTH_TOKEN: ${{ secrets.CI_SLACK_BOT_OAUTH_TOKEN }}
-        run: |
-          if [ -z "$SLACK_BOT_OAUTH_TOKEN" ]; then
-            echo "SLACK_BOT_OAUTH_TOKEN not set; skipping Slack notification."
-            exit 0
-          fi
-          payload=$(jq --arg ch "$SLACK_CHANNEL" '. + {channel: $ch}' output/slack-message.json)
-          resp=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer $SLACK_BOT_OAUTH_TOKEN" \
-            -H 'Content-type: application/json; charset=utf-8' \
-            --data "$payload")
-          if [ "$(echo "$resp" | jq -r '.ok')" = "true" ]; then
-            echo "Slack message sent to ${SLACK_CHANNEL}."
-          else
-            echo "Slack error: $(echo "$resp" | jq -r '.error // "unknown"')"
-          fi
-
-      - name: Notify Slack on failure
-        if: failure()
-        continue-on-error: true
-        env:
-          SLACK_BOT_OAUTH_TOKEN: ${{ secrets.CI_SLACK_BOT_OAUTH_TOKEN }}
+          JOB_FAILED: ${{ failure() }}
+          COLOR: ${{ steps.summary.outputs.color }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$SLACK_BOT_OAUTH_TOKEN" ]; then
             echo "SLACK_BOT_OAUTH_TOKEN not set; skipping Slack notification."
             exit 0
           fi
-          payload=$(jq -n \
-            --arg ch "$SLACK_CHANNEL" \
-            --arg title ":rotating_light: Daily NIM Usage Scan #${GITHUB_RUN_NUMBER} failed" \
-            --arg url "$RUN_URL" \
-            '{channel: $ch, attachments: [{
-               color: "danger",
-               title: $title,
-               title_link: $url,
-               text: ("The daily scan workflow failed. <" + $url + "|View run>"),
-               mrkdwn_in: ["text"]
-             }]}')
-          resp=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer $SLACK_BOT_OAUTH_TOKEN" \
-            -H 'Content-type: application/json; charset=utf-8' \
-            --data "$payload")
-          if [ "$(echo "$resp" | jq -r '.ok')" = "true" ]; then
-            echo "Slack failure alert sent to ${SLACK_CHANNEL}."
-          else
-            echo "Slack error: $(echo "$resp" | jq -r '.error // "unknown"')"
+
+          send() {  # $1 = channel, $2 = JSON payload
+            resp=$(curl -sS -X POST https://slack.com/api/chat.postMessage \
+              -H "Authorization: Bearer $SLACK_BOT_OAUTH_TOKEN" \
+              -H 'Content-type: application/json; charset=utf-8' \
+              --data "$2")
+            if [ "$(echo "$resp" | jq -r '.ok')" = "true" ]; then
+              echo "Slack message sent to $1."
+            else
+              echo "Slack error ($1): $(echo "$resp" | jq -r '.error // "unknown"')"
+            fi
+          }
+
+          # Job failed -> danger alert to the owner only.
+          if [ "$JOB_FAILED" = "true" ]; then
+            payload=$(jq -n \
+              --arg ch "$SLACK_OWNER" \
+              --arg title ":rotating_light: Daily NIM Usage Scan #${GITHUB_RUN_NUMBER} failed" \
+              --arg url "$RUN_URL" \
+              '{channel: $ch, attachments: [{
+                 color: "danger",
+                 title: $title,
+                 title_link: $url,
+                 text: ("The daily scan workflow failed. <" + $url + "|View run>"),
+                 mrkdwn_in: ["text"]
+               }]}')
+            send "$SLACK_OWNER" "$payload"
+            exit 0
+          fi
+
+          # Success: send the scan summary to the channel (on change or when
+          # forced), and DM the owner on danger/warning.
+          if [ "$COLOR" != "good" ] || [ "$ALWAYS_SEND_SLACK" = "true" ]; then
+            send "$SLACK_CHANNEL" "$(jq --arg ch "$SLACK_CHANNEL" '. + {channel: $ch}' output/slack-message.json)"
+          fi
+          if [ "$COLOR" != "good" ]; then
+            send "$SLACK_OWNER" "$(jq --arg ch "$SLACK_OWNER" '. + {channel: $ch}' output/slack-message.json)"
           fi
 
       - name: Upload binary, config, and reports

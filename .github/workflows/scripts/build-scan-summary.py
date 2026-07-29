@@ -56,6 +56,44 @@ def entries_with(affected: list, nims_key: str) -> list:
     return [e for e in affected if e.get(nims_key)]
 
 
+def is_ignored(entry: dict, ignored: set) -> bool:
+    """True if an affected record's blueprint name or repository is in `ignored`."""
+    name = (entry.get("blueprint_name") or "").strip().lower()
+    repo = (entry.get("repository") or "").strip().lower()
+    return name in ignored or repo in ignored
+
+
+def repo_github_url(entry: dict) -> str:
+    """Web URL for a repo entry's GitHub repository (no trailing .git)."""
+    url = entry.get("url") or f"https://github.com/{entry.get('name', '')}"
+    return url.removesuffix(".git")
+
+
+def repo_link_html(entry: dict) -> str:
+    """Render a repo entry as an HTML link: <repo-name> -> GitHub."""
+    return f'<a href="{html.escape(repo_github_url(entry))}">{html.escape(entry.get("name", ""))}</a>'
+
+
+def affected_record_html(entry: dict) -> str:
+    """Render an affected-blueprint record as HTML: <blueprint-name>: Repository."""
+    label = entry.get("blueprint_name") or entry.get("repository", "")
+    build_url = entry.get("blueprint_url") or ""
+    github_url = entry.get("repository_url") or ""
+    name_html = (
+        f'<a href="{html.escape(build_url)}">{html.escape(label)}</a>' if build_url else html.escape(label)
+    )
+    return f'{name_html}: <a href="{html.escape(github_url)}">Repository</a>'
+
+
+def affected_record_slack(entry: dict) -> str:
+    """Render an affected-blueprint record as Slack mrkdwn: <blueprint-name>: Repository."""
+    label = entry.get("blueprint_name") or entry.get("repository", "")
+    build_url = entry.get("blueprint_url") or ""
+    github_url = entry.get("repository_url") or ""
+    name_txt = f"<{build_url}|{label}>" if build_url else label
+    return f"{name_txt}: <{github_url}|Repository>"
+
+
 def render_html(
     run_number: str,
     run_url: str,
@@ -65,13 +103,14 @@ def render_html(
     removed_active: list,
     added_deprecated: list,
     affected: list,
+    ignored: set,
 ) -> str:
-    def details(title: str, items: list) -> str:
-        if not items:
+    def details(title: str, entries: list) -> str:
+        if not entries:
             return ""
-        lis = "\n".join(f"<li>{html.escape(str(i))}</li>" for i in items)
+        lis = "\n".join(f"<li>{repo_link_html(e)}</li>" for e in entries)
         return (
-            f"<details><summary>{html.escape(title)} ({len(items)})</summary>\n"
+            f"<details><summary>{html.escape(title)} ({len(entries)})</summary>\n"
             f"<ul>\n{lis}\n</ul>\n</details>"
         )
 
@@ -91,14 +130,15 @@ def render_html(
 
     def affected_section(title: str, nims_key: str) -> None:
         entries = entries_with(affected, nims_key)
-        parts.append(f"<h3>{html.escape(title)}: {len(entries)}</h3>")
+        ignored_count = sum(1 for e in entries if is_ignored(e, ignored))
+        suffix = f" (ignored: {ignored_count})" if ignored_count else ""
+        parts.append(f"<h3>{html.escape(title)}: {len(entries)}{suffix}</h3>")
         if entries:
-            items = []
-            for entry in entries:
-                repo = html.escape(str(entry.get("repository", "")))
-                nims = html.escape(", ".join(entry.get(nims_key) or []))
-                items.append(f"<li><strong>{repo}</strong>{' &mdash; ' + nims if nims else ''}</li>")
-            parts.append("<ul>\n" + "\n".join(items) + "\n</ul>")
+            items = "\n".join(
+                f"<li>{affected_record_html(e)}{' (ignored)' if is_ignored(e, ignored) else ''}</li>"
+                for e in entries
+            )
+            parts.append(f"<ul>\n{items}\n</ul>")
 
     affected_section("Blueprints affected by deprecated NIMs (hosted)", "affected_hosted_nims")
     affected_section("Blueprints affected by deprecated NIMs (local)", "affected_local_nims")
@@ -118,12 +158,16 @@ def render_slack(
     removed_active: list,
     added_deprecated: list,
     affected: list,
+    local_nims_safe: bool,
+    ignored: set,
 ) -> dict:
     emoji = COLOR_EMOJI.get(color, "")
     title = f"NIM Usage Scan #{run_number}" if run_number else "NIM Usage Scan"
     if emoji:
         title = f"{emoji} {title}"
 
+    # Repos-refresh changes are summarized as counts only; the itemized per-repo
+    # lists live in the HTML summary, not Slack.
     lines = [
         f"*Repos refresh:* active {active_after} (added {len(added_active)}, removed {len(removed_active)}), "
         f"deprecated {deprecated_after} (added {len(added_deprecated)})",
@@ -131,14 +175,18 @@ def render_slack(
 
     def affected_section(title: str, nims_key: str) -> None:
         entries = entries_with(affected, nims_key)
-        lines.append(f"*{title}:* {len(entries)}")
-        for entry in entries[:SLACK_LIST_CAP]:
-            lines.append(f"• {entry.get('repository', '')}")
-        if len(entries) > SLACK_LIST_CAP:
-            lines.append(f"…and {len(entries) - SLACK_LIST_CAP} more")
+        shown = [e for e in entries if not is_ignored(e, ignored)]
+        ignored_count = len(entries) - len(shown)
+        suffix = f" (ignored: {ignored_count})" if ignored_count else ""
+        lines.append(f"*{title}:* {len(entries)}{suffix}")
+        for entry in shown[:SLACK_LIST_CAP]:
+            lines.append(f"• {affected_record_slack(entry)}")
+        if len(shown) > SLACK_LIST_CAP:
+            lines.append(f"…and {len(shown) - SLACK_LIST_CAP} more")
 
     affected_section("Blueprints affected by deprecated NIMs (hosted)", "affected_hosted_nims")
-    affected_section("Blueprints affected by deprecated NIMs (local)", "affected_local_nims")
+    if not local_nims_safe:
+        affected_section("Blueprints affected by deprecated NIMs (local)", "affected_local_nims")
 
     attachment = {
         "color": color,
@@ -174,12 +222,22 @@ def main() -> None:
         help="Treat blueprints affected only by deprecated LOCAL NIMs as safe "
              "(color 'good') instead of 'danger'.",
     )
+    parser.add_argument(
+        "--ignore-blueprints",
+        default="",
+        help="Comma-separated blueprint names or repos to drop from the scan "
+             "summary (HTML + Slack); they no longer escalate the notification color.",
+    )
     args = parser.parse_args()
 
     summary = load_json(args.refresh_summary, None)
     affected = load_json(args.affected, [])
     if not isinstance(affected, list):
         affected = []
+
+    # Ignored blueprints stay in the report (counted and, in HTML, marked) but are
+    # excluded from the notification escalation so they don't flood Slack.
+    ignored = {s.strip().lower() for s in args.ignore_blueprints.split(",") if s.strip()}
 
     html_path = Path(args.html_out)
     slack_path = Path(args.slack_out)
@@ -208,18 +266,18 @@ def main() -> None:
         write_color(color)
         return
 
-    added_active = summary.get("added_active_blueprints") or []
-    removed_active = summary.get("removed_active_blueprints") or []
-    added_deprecated = summary.get("added_deprecated_blueprints") or []
+    added_active = summary.get("added_active_repos") or []
+    removed_active = summary.get("removed_active_repos") or []
+    added_deprecated = summary.get("added_deprecated_repos") or []
     counts = summary.get("counts") or {}
     active_after = counts.get("repos_active_after", "?")
     deprecated_after = counts.get("repos_deprecated_after", "?")
 
     has_changes = bool(added_active or removed_active or added_deprecated)
+    # Only non-ignored affected blueprints escalate.
+    escalating = [a for a in affected if not is_ignored(a, ignored)]
     if args.affected_local_nims_safe:
-        escalating = entries_with(affected, "affected_hosted_nims")
-    else:
-        escalating = affected
+        escalating = entries_with(escalating, "affected_hosted_nims")
     if escalating:
         color = "danger"
     elif has_changes:
@@ -230,7 +288,7 @@ def main() -> None:
     html_path.write_text(
         render_html(
             args.run_number, args.run_url, active_after, deprecated_after,
-            added_active, removed_active, added_deprecated, affected,
+            added_active, removed_active, added_deprecated, affected, ignored,
         ),
         encoding="utf-8",
     )
@@ -239,6 +297,7 @@ def main() -> None:
             render_slack(
                 args.run_number, args.run_url, color, active_after, deprecated_after,
                 added_active, removed_active, added_deprecated, affected,
+                args.affected_local_nims_safe, ignored,
             ),
             indent=2,
         )

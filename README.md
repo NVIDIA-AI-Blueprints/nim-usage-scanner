@@ -58,7 +58,7 @@ export GITHUB_TOKEN="ghp_xxx"
 # With --check-deprecation, ./output/deprecation_affected_blueprints.{json,csv} are added when any blueprint is affected
 ```
 
-> **Note:** `--check-deprecation` shells out to `scripts/find_deprecated_blueprints.py`, which requires **PyYAML**. The scanner runs it with the repo's `.venv` if present, otherwise `python3` on `PATH`. Set up the dependency once with:
+> **Note:** `--check-deprecation` shells out to `scripts/find_blueprints_affected_by_deprecation.py`, which requires **PyYAML**. The scanner runs it with the repo's `.venv` if present, otherwise `python3` on `PATH`. Set up the dependency once with:
 >
 > ```bash
 > python3 -m venv .venv && .venv/bin/python -m pip install -r requirements.txt
@@ -143,7 +143,7 @@ Behavior:
 - Newly deprecated blueprints are added to `repos_deprecated`.
 - `repos_github_only` is never touched (manually curated).
 - Enabled active repos no longer returned by the catalog are reported as
-  `removed_active_blueprints` but only deleted when you pass `--prune-active`.
+  `removed_active_repos` but only deleted when you pass `--prune-active`.
   Disabled entries (`enabled: false`) are treated as inactive — they are never
   flagged as removed or pruned.
 
@@ -167,7 +167,7 @@ nim-usage-scanner scan [OPTIONS] -c <CONFIG> [--ngc-api-key <KEY>] [--github-tok
 | `--keep-repos` | Keep cloned repositories after scanning; with `--workdir`, next run reuses and pulls instead of cloning (default: false) |
 | `-j, --jobs` | Maximum number of parallel jobs (optional) |
 | `--refresh-repos` | Before scanning, run `scripts/refresh_repos_config.py --config <config> --in-place` to reconcile repos.yaml with the Build catalog (default: false) |
-| `--check-deprecation` | After scanning, run `scripts/find_deprecated_blueprints.py` to report blueprints referencing a deprecated NIM from `config/nims.deprecated.yaml`. Writes `deprecation_affected_blueprints.{json,csv}` to the output dir (only when at least one blueprint is affected). Requires PyYAML (see note in [Basic Usage](#basic-usage)) (default: false) |
+| `--check-deprecation` | After scanning, run `scripts/find_blueprints_affected_by_deprecation.py` to report blueprints referencing a deprecated NIM from `config/nims.deprecated.yaml`. Writes `deprecation_affected_blueprints.{json,csv}` to the output dir (only when at least one blueprint is affected). Requires PyYAML (see note in [Basic Usage](#basic-usage)) (default: false) |
 | `--ngc-api-key` | NVIDIA API Key (or use `NVIDIA_API_KEY` env var, optional) |
 | `--github-token` | GitHub Token (or use `GITHUB_TOKEN` env var, optional) |
 | `-v, --verbose` | Increase logging verbosity |

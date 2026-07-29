@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-Find blueprints that still reference a deprecated NIM.
+Find blueprints affected by a deprecated NIM.
 
-Reads the scanner's per-repo aggregate output (`report_aggregate.json`) and a
-list of deprecated NIM identifiers, then writes a CSV + JSON report of only the
-affected blueprints.
+Reads the scanner's per-repo aggregate output (`report_aggregate.json`), a list
+of deprecated NIM identifiers, and the repos config (for each repo's blueprints),
+then writes a CSV + JSON report of the affected blueprints.
 
 A NIM reference is considered affected when it contains a deprecated entry as a
 case-insensitive substring (deprecated entry is a substring of the NIM
 reference). The same deprecated list is matched against both hosted and local
 NIMs; matches are reported under `affected_hosted_nims` / `affected_local_nims`
 according to which list they came from.
+
+The result is flattened per blueprint: a repo backing multiple blueprints yields
+one record per blueprint, each carrying `blueprint_name` / `blueprint_url`.
 """
 
 import argparse
@@ -33,7 +36,22 @@ def load_deprecated(path: Path) -> list[str]:
     return [str(e).strip() for e in entries if str(e).strip()]
 
 
-def find_affected(repos: list[dict], deprecated: list[str]) -> list[dict]:
+def load_blueprints(path: Path) -> dict[str, list[dict]]:
+    """Map repo name -> its blueprints ([{name, url, ...}]) from a repos config."""
+    if not path.is_file():
+        return {}
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    mapping: dict[str, list[dict]] = {}
+    for section in ("repos_active", "repos_github_only"):
+        for entry in data.get(section) or []:
+            if isinstance(entry, dict) and entry.get("name"):
+                mapping[entry["name"]] = entry.get("blueprints") or []
+    return mapping
+
+
+def find_affected(
+    repos: list[dict], deprecated: list[str], blueprint_map: dict[str, list[dict]]
+) -> list[dict]:
     deps_lower = [d.lower() for d in deprecated]
     affected = []
     for repo in repos:
@@ -45,16 +63,24 @@ def find_affected(repos: list[dict], deprecated: list[str]) -> list[dict]:
         affected_local = sorted(
             n for n in local if any(d in n.lower() for d in deps_lower)
         )
-        if affected_hosted or affected_local:
+        if not (affected_hosted or affected_local):
+            continue
+        repository = repo.get("repository", "")
+        repository_url = repo.get("repository_url", "")
+        # Flatten per blueprint; repos with no blueprints get one blank-blueprint record.
+        blueprints = blueprint_map.get(repository) or [{}]
+        for blueprint in blueprints:
             affected.append(
                 {
-                    "repository": repo.get("repository", ""),
-                    "repository_url": repo.get("repository_url", ""),
+                    "blueprint_name": blueprint.get("name", ""),
+                    "blueprint_url": blueprint.get("url", ""),
+                    "repository": repository,
+                    "repository_url": repository_url,
                     "affected_hosted_nims": affected_hosted,
                     "affected_local_nims": affected_local,
                 }
             )
-    affected.sort(key=lambda r: r["repository"].lower())
+    affected.sort(key=lambda r: (r["repository"].lower(), r["blueprint_name"].lower()))
     return affected
 
 
@@ -90,6 +116,11 @@ def main() -> int:
         help="YAML file with a flat `deprecated:` list of NIM identifiers. "
         "Default: config/nims.deprecated.yaml",
     )
+    parser.add_argument(
+        "--config",
+        default="config/repos.yaml",
+        help="repos.yaml providing each repo's blueprints. Default: config/repos.yaml",
+    )
     args = parser.parse_args()
 
     output_dir = Path(args.output)
@@ -109,7 +140,8 @@ def main() -> int:
         return 1
 
     repos = json.loads(aggregate_path.read_text(encoding="utf-8"))
-    affected = find_affected(repos, deprecated)
+    blueprint_map = load_blueprints(Path(args.config))
+    affected = find_affected(repos, deprecated, blueprint_map)
 
     summary = (
         f"{len(affected)} affected blueprint(s) "

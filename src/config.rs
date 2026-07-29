@@ -265,6 +265,7 @@ mod tests {
         // active first, then github_only
         assert_eq!(repos[0].branch(), "develop");
         assert_eq!(repos[0].depth(), 10);
+        assert!(repos[0].enabled);
         assert_eq!(repos[1].branch(), "main");
         assert_eq!(repos[1].depth(), 1);
     }
