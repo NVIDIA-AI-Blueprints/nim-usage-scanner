@@ -152,6 +152,7 @@ def render_slack(
     removed_active: list,
     added_deprecated: list,
     affected: list,
+    local_nims_safe: bool,
 ) -> dict:
     emoji = COLOR_EMOJI.get(color, "")
     title = f"NIM Usage Scan #{run_number}" if run_number else "NIM Usage Scan"
@@ -174,7 +175,8 @@ def render_slack(
             lines.append(f"…and {len(entries) - SLACK_LIST_CAP} more")
 
     affected_section("Blueprints affected by deprecated NIMs (hosted)", "affected_hosted_nims")
-    affected_section("Blueprints affected by deprecated NIMs (local)", "affected_local_nims")
+    if not local_nims_safe:
+        affected_section("Blueprints affected by deprecated NIMs (local)", "affected_local_nims")
 
     attachment = {
         "color": color,
@@ -286,6 +288,7 @@ def main() -> None:
             render_slack(
                 args.run_number, args.run_url, color, active_after, deprecated_after,
                 added_active, removed_active, added_deprecated, affected,
+                args.affected_local_nims_safe,
             ),
             indent=2,
         )
