@@ -15,6 +15,8 @@ import argparse
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -25,13 +27,61 @@ except ImportError:  # pragma: no cover - surfaced at runtime
     yaml = None
 
 
-# List all blueprints: /v2/search/catalog/resources/BLUEPRINT with query "" and pageSize 1000 (returns all in one response).
-NGC_BLUEPRINT_LIST_URL = "https://api.ngc.nvidia.com/v2/search/catalog/resources/BLUEPRINT"
-# Spec URL pattern: https://api.ngc.nvidia.com/v2/blueprints/{orgName}/{name}/spec
-NGC_BLUEPRINTS_SPEC_URL_TEMPLATE = "https://api.ngc.nvidia.com/v2/blueprints/{org_name}/{name}/spec"
-# Attribute key that marks a blueprint as deprecated on the Build catalog.
-DEPRECATION_ATTR_KEY = "DEPRECATION"
+# ===========================================================================
+# Configuration
+# ===========================================================================
+# CLI defaults.
+DEFAULT_CONFIG_PATH = "config/repos.yaml"
+DEFAULT_SUMMARY_JSON = "repos_refresh_summary.json"
 
+# NGC catalog endpoints.
+NGC_BLUEPRINT_LIST_URL = "https://api.ngc.nvidia.com/v2/search/catalog/resources/BLUEPRINT"
+NGC_BLUEPRINTS_SPEC_URL_TEMPLATE = "https://api.ngc.nvidia.com/v2/blueprints/{org_name}/{name}/spec"
+
+# Prefix for operator log lines.
+LOG_PREFIX = "[Build Page]"
+
+
+# ===========================================================================
+# Data model
+# ===========================================================================
+
+class BlueprintCategory(Enum):
+    """A repos_active section and the singular category label written per blueprint.
+
+    Declaration order is the order sections appear in repos_active; a repo with
+    no blueprints falls back to ``DEVELOPER``.
+    """
+
+    ENTERPRISE = ("Enterprise Blueprints", "Enterprise Blueprint")
+    DEVELOPER = ("Developer Examples", "Developer Example")
+    PARTNER = ("Partner Examples", "Partner Example")
+    NEMOCLAW = ("NemoClaw", "NemoClaw")
+
+    def __init__(self, section: str, label: str) -> None:
+        self.section = section
+        self.label = label
+
+
+@dataclass
+class BlueprintRepository:
+    """One entry as it appears under repos_active / repos_github_only.
+
+    ``blueprints`` is a list of ``{name, url, category}`` dicts (the Build
+    blueprints backing this GitHub repo).
+    """
+
+    name: str
+    url: str
+    branch: str | None = None
+    enabled: bool | None = None
+    depth: int | None = None
+    blueprints: list[dict] = field(default_factory=list)
+
+
+# ===========================================================================
+# NGC catalog API
+# ===========================================================================
 
 def fetch_json(url: str) -> dict:
     req = Request(url, headers={"User-Agent": "nim-usage-scanner/1.0"})
@@ -45,6 +95,10 @@ def build_blueprint_list_url(page_size: int = 1000) -> str:
     payload = {"query": "", "pageSize": page_size}
     return f"{NGC_BLUEPRINT_LIST_URL}?q={quote(json.dumps(payload))}"
 
+
+# ===========================================================================
+# Blueprint metadata parsing
+# ===========================================================================
 
 def find_github_url(payload: object) -> str | None:
     candidates: list[tuple[int, str]] = []
@@ -152,7 +206,7 @@ def repo_name_from_github_url(url: str) -> str | None:
 def is_deprecated(resource: dict) -> bool:
     """A blueprint is deprecated if it carries a DEPRECATION attribute."""
     for attr in resource.get("attributes") or []:
-        if isinstance(attr, dict) and str(attr.get("key", "")).upper() == DEPRECATION_ATTR_KEY:
+        if isinstance(attr, dict) and str(attr.get("key", "")).upper() == "DEPRECATION":
             return True
     return False
 
@@ -169,128 +223,37 @@ def catalog_types(resource: dict) -> set[str]:
     return types
 
 
-# repos_active is grouped into these sections, in this order. A repo's section is
-# derived from its blueprint's apicatalogtype_* label (and its owner, for
-# partners). Entries with no NGC metadata fall back to DEFAULT_SECTION.
-ACTIVE_SECTIONS: list[tuple[str, str]] = [
-    ("Enterprise Blueprints", "  # Enterprise Blueprints"),
-    ("Developer Examples", "  # Developer Examples"),
-    ("Partner Examples", "  # Partner Examples"),
-    ("NemoClaw", "  # NemoClaw"),
-]
-DEFAULT_SECTION = "Developer Examples"
+def publisher_of(resource: dict) -> str:
+    """Return the blueprint's `publisher` label (the build.nvidia.com org slug).
 
-
-def categorize(repo_name: str, types: set[str]) -> str:
-    """Assign an active repo to a section from its catalog types and owner."""
-    if "apicatalogtype_nemoclaw_blueprint" in types:
-        return "NemoClaw"
-    owner = repo_name.split("/", 1)[0]
-    if not owner.lower().startswith("nvidia"):
-        return "Partner Examples"
-    if "apicatalogtype_enterprise_blueprint" in types:
-        return "Enterprise Blueprints"
-    return "Developer Examples"
-
-
-def fetch_current_blueprints(
-    org_name: str,
-    page_size: int,
-    workers: int,
-) -> tuple[set[str], set[str], dict[str, set[str]], dict]:
-    """List blueprints, split active vs deprecated, and resolve each to its GitHub repo.
-
-    Returns ``(active_repo_names, deprecated_repo_names, active_repo_types,
-    diagnostics)``, where ``active_repo_types`` maps each active repo to the union
-    of its blueprints' ``apicatalogtype_*`` labels (used for sectioning). A repo
-    that backs both an active and a deprecated blueprint is treated as active.
+    Every current blueprint publishes under ``nvidia``; default to it when the
+    label is missing so a build-page URL can still be constructed.
     """
-    url = build_blueprint_list_url(page_size)
-    data = fetch_json(url)
-
-    total = data.get("resultTotal")
-    if isinstance(total, int):
-        print(f"[Build Page] Total blueprints: {total}")
-
-    resources: list[dict] = []
-    for group in data.get("results", []):
-        resources.extend(group.get("resources", []) or [])
-
-    seen: set[tuple[str, str]] = set()
-    items: list[tuple[str, str, bool, set[str]]] = []
-    for res in resources:
-        org = res.get("orgName") or ""
-        name = res.get("name") or ""
-        if not name:
-            rid = res.get("resourceId") or ""
-            if "/" in rid:
-                org, _, name = rid.partition("/")
-            else:
-                continue
-        if org_name and org != org_name:
+    for label in resource.get("labels") or []:
+        if not isinstance(label, dict) or label.get("key") != "publisher":
             continue
-        key = (org, name)
-        if key in seen:
-            continue
-        seen.add(key)
-        items.append((org, name, is_deprecated(res), catalog_types(res)))
-
-    active_repos: set[str] = set()
-    deprecated_repos: set[str] = set()
-    active_repo_types: dict[str, set[str]] = {}
-    missing_github: list[str] = []
-    invalid_github: list[tuple[str, str]] = []
-    repo_to_resources: dict[str, list[str]] = {}
-
-    def fetch_spec(
-        item: tuple[str, str, bool, set[str]],
-    ) -> tuple[tuple[str, str, bool, set[str]], str, dict | None]:
-        org, name, _deprecated, _types = item
-        resource_id = f"{org}/{name}"
-        spec_url = NGC_BLUEPRINTS_SPEC_URL_TEMPLATE.format(org_name=org, name=name)
-        try:
-            return item, resource_id, fetch_json(spec_url)
-        except Exception as exc:  # noqa: BLE001 - report and skip
-            print(f"[Build Page] Failed to fetch spec for {resource_id}: {exc}")
-            return item, resource_id, None
-
-    if items:
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            for future in as_completed([executor.submit(fetch_spec, it) for it in items]):
-                item, resource_id, spec = future.result()
-                _, _, deprecated, types = item
-                if not spec:
-                    continue
-                github_url = find_github_url(spec)
-                if not github_url:
-                    missing_github.append(resource_id)
-                    continue
-                repo_name = repo_name_from_github_url(github_url)
-                if not repo_name:
-                    invalid_github.append((resource_id, github_url))
-                    continue
-                if deprecated:
-                    deprecated_repos.add(repo_name)
-                else:
-                    active_repos.add(repo_name)
-                    active_repo_types.setdefault(repo_name, set()).update(types)
-                repo_to_resources.setdefault(repo_name, []).append(resource_id)
-
-    # Active wins: a repo backing any active blueprint is active, not deprecated.
-    deprecated_repos -= active_repos
-
-    diagnostics = {
-        "missing_github": sorted(set(missing_github)),
-        "invalid_github": invalid_github,
-        "repo_to_resources": repo_to_resources,
-        "total_items": len(items),
-    }
-    return active_repos, deprecated_repos, active_repo_types, diagnostics
+        for value in label.get("unresolvedValues") or []:
+            if isinstance(value, str) and value:
+                return value
+    return "nvidia"
 
 
-# ---------------------------------------------------------------------------
-# Config read / reconcile / write
-# ---------------------------------------------------------------------------
+def category_label(repo_name: str, types: set[str]) -> str:
+    """Singular category label for a blueprint, from its catalog types and owner."""
+    if "apicatalogtype_nemoclaw_blueprint" in types:
+        category = BlueprintCategory.NEMOCLAW
+    elif not repo_name.split("/", 1)[0].lower().startswith("nvidia"):
+        category = BlueprintCategory.PARTNER
+    elif "apicatalogtype_enterprise_blueprint" in types:
+        category = BlueprintCategory.ENTERPRISE
+    else:
+        category = BlueprintCategory.DEVELOPER
+    return category.label
+
+
+# ===========================================================================
+# Config file I/O and repo entries
+# ===========================================================================
 
 def load_config(path: Path) -> dict:
     if yaml is None:
@@ -312,132 +275,471 @@ def entry_name(entry: object) -> str | None:
     return None
 
 
-def normalize_entry(entry: object, default_branch: str) -> dict:
-    """Return a full {name, url, branch, [depth], enabled} object for a repo."""
+def parse_repo_entry(entry: object) -> BlueprintRepository | None:
+    """Build a BlueprintRepository from a raw repos.yaml entry (dict or bare name).
+
+    ``branch`` and ``depth`` are carried only when explicitly set on the entry; a
+    repo without them inherits the config-level ``defaults``.
+    """
     if isinstance(entry, str):
         entry = {"name": entry}
+    if not isinstance(entry, dict):
+        return None
     name = entry.get("name")
-    url = entry.get("url") or f"https://github.com/{name}.git"
-    branch = entry.get("branch") or default_branch
-    result = {
-        "name": name,
-        "url": url,
-        "branch": branch,
-        "enabled": bool(entry.get("enabled", True)),
-    }
-    depth = entry.get("depth")
-    if depth is not None:
-        result["depth"] = depth
-    return result
+    if not isinstance(name, str) or not name:
+        return None
+    blueprints = entry.get("blueprints")
+    return BlueprintRepository(
+        name=name,
+        url=entry.get("url") or f"https://github.com/{name}.git",
+        branch=entry.get("branch"),
+        enabled=entry.get("enabled"),
+        depth=entry.get("depth"),
+        blueprints=blueprints if isinstance(blueprints, list) else [],
+    )
 
 
-def _entry_lines(e: dict) -> list[str]:
-    lines = [
-        f"  - name: {e['name']}",
-        f"    url: {e['url']}",
-        f"    branch: {e['branch']}",
-    ]
-    if "depth" in e:
-        lines.append(f"    depth: {e['depth']}")
-    lines.append(f"    enabled: {'true' if e['enabled'] else 'false'}")
-    return lines
+def dedupe_blueprints(blueprints: list[dict]) -> list[dict]:
+    """Sort blueprints by name and drop (name, url) duplicates for stable output."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[dict] = []
+    for bp in sorted(blueprints, key=lambda b: b["name"].lower()):
+        key = (bp["name"], bp["url"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(bp)
+    return unique
 
 
-def render_object_section(key: str, comment: str, entries: list[dict]) -> list[str]:
-    lines = [comment]
-    if not entries:
-        lines.append(f"{key}: []")
-        return lines
-    lines.append(f"{key}:")
-    for e in entries:
-        lines.extend(_entry_lines(e))
-    return lines
-
-
-def render_active_section(
-    comment: str, entries: list[dict], category_of: dict[str, str]
-) -> list[str]:
-    """Render repos_active grouped into ACTIVE_SECTIONS with sub-headers."""
-    lines = [comment]
-    if not entries:
-        lines.append("repos_active: []")
-        return lines
-    lines.append("repos_active:")
-    by_section: dict[str, list[dict]] = {section: [] for section, _ in ACTIVE_SECTIONS}
-    for e in entries:
-        section = category_of.get(e["name"], DEFAULT_SECTION)
-        by_section.setdefault(section, []).append(e)
-    first = True
-    for section, header in ACTIVE_SECTIONS:
-        section_entries = sorted(by_section.get(section, []), key=lambda e: e["name"].lower())
-        if not section_entries:
-            continue
-        if not first:
-            lines.append("")
-        first = False
-        lines.append(header)
-        for e in section_entries:
-            lines.extend(_entry_lines(e))
-    return lines
-
-
-def render_name_section(key: str, comment: str, names: list[str]) -> list[str]:
-    lines = [comment]
-    if not names:
-        lines.append(f"{key}: []")
-        return lines
-    lines.append(f"{key}:")
-    for name in names:
-        lines.append(f"  - {name}")
-    return lines
-
+# ===========================================================================
+# YAML rendering
+# ===========================================================================
 
 def render_repos_yaml(
-    version: str,
-    branch: str,
-    depth: int,
-    active: list[dict],
-    github_only: list[dict],
+    active: list[BlueprintRepository],
+    github_only: list[BlueprintRepository],
     deprecated: list[str],
-    category_of: dict[str, str],
+    header: dict,
 ) -> str:
+    """Render the full repos.yaml text.
+
+    All YAML string-building lives in this function's nested helpers, so
+    switching to PyYAML (or another emitter) only requires changing this one
+    function.
+    """
+    # Plain YAML scalars need no quoting; anything else (colons, hashes, quotes,
+    # leading/trailing space) is double-quoted. Blueprint display names are free text.
+    plain_scalar = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.,/&()'+-]*$")
+
+    def yaml_scalar(value: str) -> str:
+        """Render a string as a YAML-safe scalar, double-quoting when needed."""
+        if value and plain_scalar.match(value) and not value.endswith(" "):
+            return value
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+
+    # repos_active is grouped into these sections, in this order; a repo's
+    # section is derived from its blueprints' category labels.
+    category_by_label = {category.label: category for category in BlueprintCategory}
+
+    def category_of(repo: BlueprintRepository) -> BlueprintCategory:
+        """Place a repo into a section from its blueprints' categories."""
+        categories = {category_by_label.get(bp.get("category")) for bp in repo.blueprints}
+        for category in BlueprintCategory:
+            if category in categories:
+                return category
+        return BlueprintCategory.DEVELOPER
+
+    def entry_lines(repo: BlueprintRepository) -> list[str]:
+        lines = [
+            f"  - name: {repo.name}",
+            f"    url: {repo.url}",
+        ]
+        if repo.branch is not None:
+            lines.append(f"    branch: {repo.branch}")
+        if repo.depth is not None:
+            lines.append(f"    depth: {repo.depth}")
+        # enabled defaults to true; only the explicit false override is written.
+        if repo.enabled is False:
+            lines.append("    enabled: false")
+        if not repo.blueprints:
+            lines.append("    blueprints: []")
+        else:
+            lines.append("    blueprints:")
+            for bp in repo.blueprints:
+                lines.append(f"      - name: {yaml_scalar(bp['name'])}")
+                lines.append(f"        url: {bp['url']}")
+                lines.append(f"        category: {bp['category']}")
+        return lines
+
+    def object_section(key: str, comment: str, repos: list[BlueprintRepository]) -> list[str]:
+        lines = [comment]
+        if not repos:
+            lines.append(f"{key}: []")
+            return lines
+        lines.append(f"{key}:")
+        for repo in repos:
+            lines.extend(entry_lines(repo))
+        return lines
+
+    def active_section(comment: str, repos: list[BlueprintRepository]) -> list[str]:
+        """Render repos_active grouped by category (declaration order) with sub-headers."""
+        lines = [comment]
+        if not repos:
+            lines.append("repos_active: []")
+            return lines
+        lines.append("repos_active:")
+        by_category: dict[BlueprintCategory, list[BlueprintRepository]] = {c: [] for c in BlueprintCategory}
+        for repo in repos:
+            by_category[category_of(repo)].append(repo)
+        first = True
+        for category in BlueprintCategory:
+            section_repos = sorted(by_category[category], key=lambda r: r.name.lower())
+            if not section_repos:
+                continue
+            if not first:
+                lines.append("")
+            first = False
+            lines.append(f"  # {category.section}")
+            for repo in section_repos:
+                lines.extend(entry_lines(repo))
+        return lines
+
+    def name_section(key: str, comment: str, names: list[str]) -> list[str]:
+        lines = [comment]
+        if not names:
+            lines.append(f"{key}: []")
+            return lines
+        lines.append(f"{key}:")
+        for name in names:
+            lines.append(f"  - {name}")
+        return lines
+
     lines: list[str] = [
         "# NIM Usage Scanner Configuration",
         "# Repositories to scan for NIM usage, grouped by category.",
         "",
-        f'version: "{version}"',
+        f'version: "{header["version"]}"',
         "",
         "# Default settings applied to all repositories",
         "defaults:",
-        f"  branch: {branch}",
-        f"  depth: {depth}",
+        f"  branch: {header['branch']}",
+        f"  depth: {header['depth']}",
         "",
     ]
-    lines += render_active_section(
-        "# Active on Build and not deprecated. Scanned.",
-        active,
-        category_of,
+    lines += active_section("# Active on Build and not deprecated. Scanned.", active)
+    lines.append("")
+    lines += object_section(
+        "repos_github_only", "# Only on GitHub (not returned by the Build API). Scanned.", github_only
     )
     lines.append("")
-    lines += render_object_section(
-        "repos_github_only",
-        "# Only on GitHub (not returned by the Build API). Scanned.",
-        github_only,
-    )
-    lines.append("")
-    lines += render_name_section(
-        "repos_deprecated",
-        "# Deprecated on Build (DEPRECATION attribute). NOT scanned.",
-        deprecated,
+    lines += name_section(
+        "repos_deprecated", "# Deprecated on Build (DEPRECATION attribute). NOT scanned.", deprecated
     )
     return "\n".join(lines) + "\n"
 
+
+# ===========================================================================
+# Pipeline steps
+# ===========================================================================
+
+def load_current_repos(
+    path: Path,
+) -> tuple[dict[str, BlueprintRepository], list[str]]:
+    """Step 1: read the current config into (active, deprecated).
+
+    ``active`` maps repo name -> BlueprintRepository; ``deprecated`` is a list of
+    names. GitHub-only repos are not returned here: they are reconciled against
+    the catalog like any other repo (so one going live is auto-detected) and are
+    re-read verbatim by ``write_config``.
+    """
+    config = load_config(path)
+
+    current_repos_active: dict[str, BlueprintRepository] = {}
+    for entry in config.get("repos_active") or []:
+        repo = parse_repo_entry(entry)
+        if repo:
+            current_repos_active[repo.name] = repo
+
+    current_repos_deprecated = [n for n in (entry_name(e) for e in config.get("repos_deprecated") or []) if n]
+
+    return current_repos_active, current_repos_deprecated
+
+
+def fetch_latest_repos(
+    org_name: str = "qc69jvmznzxy", page_size: int = 1000, workers: int = 8
+) -> tuple[dict[str, BlueprintRepository], list[str]]:
+    """Step 2: list blueprints and resolve them to (active, deprecated) repos.
+
+    ``latest_repos_active`` maps each active repo name -> BlueprintRepository
+    (with its blueprints, including any newly-deprecated ones so a kept repo
+    still has data). ``latest_repos_deprecated`` is a list of names of repos
+    backing only deprecated blueprints. A repo backing any active blueprint is
+    treated as active.
+    """
+    data = fetch_json(build_blueprint_list_url(page_size))
+
+    total = data.get("resultTotal")
+    if isinstance(total, int):
+        print(f"{LOG_PREFIX} Total blueprints: {total}")
+
+    resources: list[dict] = []
+    for group in data.get("results", []):
+        resources.extend(group.get("resources", []) or [])
+
+    # One (org, name, deprecated, types, display_name, build_url) item per unique blueprint.
+    seen: set[tuple[str, str]] = set()
+    items: list[tuple[str, str, bool, set[str], str, str]] = []
+    for res in resources:
+        org = res.get("orgName") or ""
+        name = res.get("name") or ""
+        if not name:
+            rid = res.get("resourceId") or ""
+            if "/" in rid:
+                org, _, name = rid.partition("/")
+            else:
+                continue
+        if org_name and org != org_name:
+            continue
+        key = (org, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        display_name = res.get("displayName") or name
+        build_url = f"https://build.nvidia.com/{publisher_of(res)}/{name}"
+        items.append((org, name, is_deprecated(res), catalog_types(res), display_name, build_url))
+
+    active_repos: set[str] = set()
+    deprecated_repos: set[str] = set()
+    missing_github: list[str] = []
+    invalid_github: list[tuple[str, str]] = []
+    repo_to_resources: dict[str, list[str]] = {}
+    repo_to_blueprints: dict[str, list[dict]] = {}
+
+    def fetch_spec(
+        item: tuple[str, str, bool, set[str], str, str],
+    ) -> tuple[tuple[str, str, bool, set[str], str, str], str, dict | None]:
+        org, name, _deprecated, _types, _display, _build = item
+        resource_id = f"{org}/{name}"
+        spec_url = NGC_BLUEPRINTS_SPEC_URL_TEMPLATE.format(org_name=org, name=name)
+        try:
+            return item, resource_id, fetch_json(spec_url)
+        except Exception as exc:  # noqa: BLE001 - report and skip
+            print(f"{LOG_PREFIX} Failed to fetch spec for {resource_id}: {exc}")
+            return item, resource_id, None
+
+    if items:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for future in as_completed([executor.submit(fetch_spec, it) for it in items]):
+                item, resource_id, spec = future.result()
+                _, _, deprecated, types, display_name, build_url = item
+                if not spec:
+                    continue
+                github_url = find_github_url(spec)
+                if not github_url:
+                    missing_github.append(resource_id)
+                    continue
+                repo_name = repo_name_from_github_url(github_url)
+                if not repo_name:
+                    invalid_github.append((resource_id, github_url))
+                    continue
+                if deprecated:
+                    deprecated_repos.add(repo_name)
+                else:
+                    active_repos.add(repo_name)
+                # Collect blueprints for every repo, including newly-deprecated ones,
+                # so a repo kept in repos_active still gets its blueprint data
+                # populated (the maintainer curates it by hand as needed).
+                repo_to_blueprints.setdefault(repo_name, []).append(
+                    {
+                        "name": display_name,
+                        "url": build_url,
+                        "category": category_label(repo_name, types),
+                    }
+                )
+                repo_to_resources.setdefault(repo_name, []).append(resource_id)
+
+    # Active wins: a repo backing any active blueprint is active, not deprecated.
+    deprecated_repos -= active_repos
+
+    # New active repos are written without branch/depth/enabled so they inherit
+    # the config-level defaults; the maintainer can add overrides by hand.
+    latest_repos_active = {
+        name: BlueprintRepository(
+            name=name,
+            url=f"https://github.com/{name}.git",
+            blueprints=dedupe_blueprints(repo_to_blueprints.get(name, [])),
+        )
+        for name in sorted(active_repos)
+    }
+    latest_repos_deprecated = sorted(deprecated_repos)
+
+    def print_diagnostics() -> None:
+        """Operator diagnostics about resolving blueprints to GitHub repos."""
+        print(f"{LOG_PREFIX} Blueprints processed: {len(items)}")
+        if missing_github:
+            print(f"{LOG_PREFIX} Missing GitHub URL for:")
+            for resource_id in sorted(set(missing_github)):
+                print(f"  - {resource_id}")
+        if invalid_github:
+            print(f"{LOG_PREFIX} Invalid GitHub URL for:")
+            for resource_id, url in invalid_github:
+                print(f"  - {resource_id}: {url}")
+        duplicates = {k: v for k, v in repo_to_resources.items() if len(v) > 1}
+        if duplicates:
+            print(f"{LOG_PREFIX} Repos backed by multiple NGC blueprint IDs:")
+            for repo, resources in sorted(duplicates.items()):
+                print(f"  - {repo}")
+                for resource_id in resources:
+                    print(f"    * {resource_id}")
+
+    print_diagnostics()
+    return latest_repos_active, latest_repos_deprecated
+
+
+def calculate_difference(
+    current_active: dict[str, BlueprintRepository],
+    current_deprecated: list[str],
+    latest_active: dict[str, BlueprintRepository],
+    latest_deprecated: list[str],
+    prune_active: bool,
+) -> tuple[dict[str, BlueprintRepository], list[str], dict]:
+    """Step 3: reconcile current against latest -> (output_active, output_deprecated, summary).
+
+    GitHub-only repos are deliberately not excluded: a repo currently tracked as
+    GitHub-only that goes live on the catalog surfaces here as a newly-added
+    active repo (the maintainer then drops it from the github-only list).
+    """
+    current_active_names = set(current_active)
+    # Disabled active entries (enabled: false) are intentionally parked; treat
+    # them as inactive so a refresh does not flag them as removed or prune them.
+    enabled_current_active = {name for name, repo in current_active.items() if repo.enabled is not False}
+    current_deprecated_names = set(current_deprecated)
+
+    latest_active_names = set(latest_active)
+    latest_deprecated_names = set(latest_deprecated)
+
+    added_repos_active_names = sorted(latest_active_names - current_active_names)
+    # Only enabled active repos are reconciled against the catalog; disabled ones
+    # are inactive and never reported as removed (nor pruned below).
+    removed_repos_active_names = sorted(enabled_current_active - latest_active_names)
+    added_repos_deprecated = sorted(latest_deprecated_names - current_deprecated_names)
+
+    # Preserve existing entries verbatim; refresh their blueprints from the
+    # catalog; add newly-active repos. Repos no longer active are kept (their
+    # blueprint data comes from the current config) unless --prune-active.
+    output_repos_active = dict(current_active)
+    for name in sorted(latest_active_names):
+        if name in output_repos_active:
+            output_repos_active[name] = replace(
+                output_repos_active[name], blueprints=latest_active[name].blueprints
+            )
+        else:
+            output_repos_active[name] = latest_active[name]
+    if prune_active:
+        for name in removed_repos_active_names:
+            output_repos_active.pop(name, None)
+
+    output_active_names = set(output_repos_active)
+    # Deprecated never overlaps active (a reactivated repo drops out).
+    output_repos_deprecated = sorted(
+        (current_deprecated_names | set(added_repos_deprecated)) - output_active_names
+    )
+
+    summary = {
+        "added_repos_active_names": added_repos_active_names,
+        "removed_repos_active_names": removed_repos_active_names,
+        "added_repos_deprecated": added_repos_deprecated,
+        "counts": {
+            "current_active": len(latest_active_names),
+            "current_deprecated": len(latest_deprecated_names),
+            "repos_active_before": len(current_active_names),
+            "repos_active_after": len(output_repos_active),
+            "repos_deprecated_before": len(current_deprecated_names),
+            "repos_deprecated_after": len(output_repos_deprecated),
+        },
+    }
+    return output_repos_active, output_repos_deprecated, summary
+
+
+def write_config(
+    config_path: Path,
+    output_path: Path,
+    output_active: dict[str, BlueprintRepository],
+    output_deprecated: list[str],
+) -> None:
+    """Step 4: render and write the updated repos.yaml.
+
+    The top-level ``version``/``defaults`` (branch/depth) and the github-only
+    repos are read back from the existing config so they carry through as-is.
+    """
+    config = load_config(config_path)
+    defaults = config.get("defaults") or {}
+    header = {
+        "version": str(config.get("version")),
+        "branch": defaults.get("branch"),
+        "depth": defaults.get("depth"),
+    }
+    github_only = [repo for repo in (parse_repo_entry(e) for e in config.get("repos_github_only") or []) if repo]
+    content = render_repos_yaml(
+        list(output_active.values()),
+        github_only,
+        output_deprecated,
+        header,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(content, encoding="utf-8")
+
+
+def write_summary(path: Path, summary: dict, prune_active: bool) -> None:
+    """Step 5a: write the machine-readable refresh summary JSON."""
+    data = {
+        "added_active_blueprints": summary["added_repos_active_names"],
+        "removed_active_blueprints": summary["removed_repos_active_names"],
+        "added_deprecated_blueprints": summary["added_repos_deprecated"],
+        "pruned_active": bool(prune_active),
+        "counts": summary["counts"],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def print_summary(summary: dict, output_path: Path, summary_path: Path, prune_active: bool) -> None:
+    """Step 5b: print the reconciliation result for operators."""
+    counts = summary["counts"]
+    added_active = summary["added_repos_active_names"]
+    removed_active = summary["removed_repos_active_names"]
+    added_deprecated = summary["added_repos_deprecated"]
+    print(f"{LOG_PREFIX} Current: {counts['current_active']} active, {counts['current_deprecated']} deprecated")
+    print(
+        f"{LOG_PREFIX} Active added: {len(added_active)}, removed: {len(removed_active)}"
+        f"{' (pruned)' if prune_active else ' (kept; use --prune-active to remove)'}"
+    )
+    print(f"{LOG_PREFIX} Deprecated added: {len(added_deprecated)}")
+    print(f"{LOG_PREFIX} Wrote {output_path} and {summary_path}")
+    if added_active:
+        print(f"{LOG_PREFIX} Added active:")
+        for name in added_active:
+            print(f"  + {name}")
+    if removed_active:
+        print(f"{LOG_PREFIX} Removed active (candidates):")
+        for name in removed_active:
+            print(f"  - {name}")
+    if added_deprecated:
+        print(f"{LOG_PREFIX} Added deprecated:")
+        for name in added_deprecated:
+            print(f"  ! {name}")
+
+
+# ===========================================================================
+# Entry point
+# ===========================================================================
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Refresh nim-usage-scanner repos.yaml from NGC blueprint endpoints"
     )
-    parser.add_argument("--config", default="config/repos.yaml", help="Input repos.yaml path")
+    parser.add_argument("--config", default=DEFAULT_CONFIG_PATH, help="Input repos.yaml path")
     parser.add_argument(
         "--output",
         default=None,
@@ -450,7 +752,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--summary-json",
-        default="repos_refresh_summary.json",
+        default=DEFAULT_SUMMARY_JSON,
         help="Path for the refresh summary JSON",
     )
     parser.add_argument(
@@ -458,11 +760,6 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Remove active repos no longer returned as active by the Build API",
     )
-    parser.add_argument("--org", default="qc69jvmznzxy", help="NGC org name (default: qc69jvmznzxy)")
-    parser.add_argument("--page-size", type=int, default=1000, help="NGC page size")
-    parser.add_argument("--workers", type=int, default=8, help="Spec fetch workers")
-    parser.add_argument("--branch", default="main", help="Default branch for new entries")
-    parser.add_argument("--depth", type=int, default=1, help="Default clone depth")
     return parser.parse_args()
 
 
@@ -474,135 +771,31 @@ def main() -> None:
     if output_path is None:
         raise SystemExit("Specify --output PATH or --in-place to write the updated config.")
 
-    config = load_config(config_path)
-    version = str(config.get("version") or "1.0")
-    defaults = config.get("defaults") or {}
-    branch = defaults.get("branch") or args.branch
-    depth = defaults.get("depth")
-    depth = args.depth if depth is None else depth
+    # 1. Load the current config.
+    current_active, current_deprecated = load_current_repos(config_path)
 
-    existing_active = config.get("repos_active") or []
-    existing_github_only = config.get("repos_github_only") or []
-    existing_deprecated = config.get("repos_deprecated") or []
-
-    existing_active_by_name: dict[str, dict] = {}
-    for e in existing_active:
-        name = entry_name(e)
-        if name:
-            existing_active_by_name[name] = e if isinstance(e, dict) else {"name": name}
-    existing_active_names = set(existing_active_by_name)
-    # Disabled active entries (enabled: false) are intentionally parked; treat
-    # them as inactive so a refresh does not flag them as removed or prune them.
-    enabled_active_names = {
-        name for name, entry in existing_active_by_name.items() if entry.get("enabled", True) is not False
-    }
-    github_only_names = {n for n in (entry_name(e) for e in existing_github_only) if n}
-    existing_deprecated_names = {n for n in (entry_name(e) for e in existing_deprecated) if n}
-
-    active_repos, deprecated_repos, active_repo_types, diag = fetch_current_blueprints(
-        args.org, args.page_size, args.workers
-    )
-    if not active_repos and not deprecated_repos:
+    # 2. Fetch the latest blueprints from the Build catalog.
+    latest_active, latest_deprecated = fetch_latest_repos()
+    if not latest_active and not latest_deprecated:
         print("Error: No blueprints found from NGC API.")
         raise SystemExit(1)
 
-    # Repos tracked as GitHub-only are managed manually; never touch them.
-    current_active = active_repos - github_only_names
-    current_deprecated = deprecated_repos - github_only_names
-
-    added_active = sorted(current_active - existing_active_names)
-    # Only enabled active repos are reconciled against the catalog; disabled ones
-    # are inactive and never reported as removed (nor pruned below).
-    removed_active = sorted(enabled_active_names - current_active)
-    added_deprecated = sorted(current_deprecated - existing_deprecated_names)
-
-    # Build the updated active list, preserving existing entries verbatim.
-    new_active_by_name = dict(existing_active_by_name)
-    for name in added_active:
-        new_active_by_name[name] = {
-            "name": name,
-            "url": f"https://github.com/{name}.git",
-            "branch": branch,
-            "enabled": True,
-        }
-    if args.prune_active:
-        for name in removed_active:
-            new_active_by_name.pop(name, None)
-
-    new_active_names = set(new_active_by_name)
-    new_active = [normalize_entry(new_active_by_name[n], branch) for n in sorted(new_active_by_name)]
-    new_github_only = [normalize_entry(e, branch) for e in existing_github_only]
-    # Deprecated never overlaps active or github-only (a reactivated repo drops out).
-    new_deprecated = sorted(
-        (existing_deprecated_names | set(added_deprecated)) - new_active_names - github_only_names
+    # 3. Calculate the difference between current and latest.
+    output_active, output_deprecated, summary = calculate_difference(
+        current_active,
+        current_deprecated,
+        latest_active,
+        latest_deprecated,
+        args.prune_active,
     )
 
-    # Section for each active repo, derived from NGC labels; unknowns (e.g. repos
-    # not currently returned by the catalog) fall back to DEFAULT_SECTION.
-    category_of = {
-        name: categorize(name, active_repo_types.get(name, set())) for name in new_active_names
-    }
+    # 4. Write the updated config (github-only repos pass through unchanged).
+    write_config(config_path, output_path, output_active, output_deprecated)
 
-    content = render_repos_yaml(
-        version, branch, depth, new_active, new_github_only, new_deprecated, category_of
-    )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(content, encoding="utf-8")
-
-    summary = {
-        "added_active_blueprints": added_active,
-        "removed_active_blueprints": removed_active,
-        "added_deprecated_blueprints": added_deprecated,
-        "pruned_active": bool(args.prune_active),
-        "counts": {
-            "current_active": len(current_active),
-            "current_deprecated": len(current_deprecated),
-            "repos_active_before": len(existing_active_names),
-            "repos_active_after": len(new_active),
-            "repos_deprecated_before": len(existing_deprecated_names),
-            "repos_deprecated_after": len(new_deprecated),
-        },
-    }
+    # 5. Write and print the summary.
     summary_path = Path(args.summary_json)
-    summary_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-
-    # Operator diagnostics.
-    print(f"[Build Page] Blueprints processed: {diag['total_items']}")
-    print(f"[Build Page] Current: {len(current_active)} active, {len(current_deprecated)} deprecated")
-    print(
-        f"[Build Page] Active added: {len(added_active)}, removed: {len(removed_active)}"
-        f"{' (pruned)' if args.prune_active else ' (kept; use --prune-active to remove)'}"
-    )
-    print(f"[Build Page] Deprecated added: {len(added_deprecated)}")
-    print(f"[Build Page] Wrote {output_path} and {summary_path}")
-    if added_active:
-        print("[Build Page] Added active:")
-        for name in added_active:
-            print(f"  + {name}")
-    if removed_active:
-        print("[Build Page] Removed active (candidates):")
-        for name in removed_active:
-            print(f"  - {name}")
-    if added_deprecated:
-        print("[Build Page] Added deprecated:")
-        for name in added_deprecated:
-            print(f"  ! {name}")
-    if diag["missing_github"]:
-        print("[Build Page] Missing GitHub URL for:")
-        for resource_id in diag["missing_github"]:
-            print(f"  - {resource_id}")
-    if diag["invalid_github"]:
-        print("[Build Page] Invalid GitHub URL for:")
-        for resource_id, url in diag["invalid_github"]:
-            print(f"  - {resource_id}: {url}")
-    duplicates = {k: v for k, v in diag["repo_to_resources"].items() if len(v) > 1}
-    if duplicates:
-        print("[Build Page] Repos backed by multiple NGC blueprint IDs:")
-        for repo, resources in sorted(duplicates.items()):
-            print(f"  - {repo}")
-            for resource_id in resources:
-                print(f"    * {resource_id}")
+    write_summary(summary_path, summary, args.prune_active)
+    print_summary(summary, output_path, summary_path, args.prune_active)
 
 
 if __name__ == "__main__":
