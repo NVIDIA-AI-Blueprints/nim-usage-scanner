@@ -103,6 +103,7 @@ def render_html(
     removed_active: list,
     added_deprecated: list,
     affected: list,
+    ignored: set,
 ) -> str:
     def details(title: str, entries: list) -> str:
         if not entries:
@@ -129,9 +130,14 @@ def render_html(
 
     def affected_section(title: str, nims_key: str) -> None:
         entries = entries_with(affected, nims_key)
-        parts.append(f"<h3>{html.escape(title)}: {len(entries)}</h3>")
+        ignored_count = sum(1 for e in entries if is_ignored(e, ignored))
+        suffix = f" (ignored: {ignored_count})" if ignored_count else ""
+        parts.append(f"<h3>{html.escape(title)}: {len(entries)}{suffix}</h3>")
         if entries:
-            items = "\n".join(f"<li>{affected_record_html(e)}</li>" for e in entries)
+            items = "\n".join(
+                f"<li>{affected_record_html(e)}{' (ignored)' if is_ignored(e, ignored) else ''}</li>"
+                for e in entries
+            )
             parts.append(f"<ul>\n{items}\n</ul>")
 
     affected_section("Blueprints affected by deprecated NIMs (hosted)", "affected_hosted_nims")
@@ -153,6 +159,7 @@ def render_slack(
     added_deprecated: list,
     affected: list,
     local_nims_safe: bool,
+    ignored: set,
 ) -> dict:
     emoji = COLOR_EMOJI.get(color, "")
     title = f"NIM Usage Scan #{run_number}" if run_number else "NIM Usage Scan"
@@ -168,11 +175,14 @@ def render_slack(
 
     def affected_section(title: str, nims_key: str) -> None:
         entries = entries_with(affected, nims_key)
-        lines.append(f"*{title}:* {len(entries)}")
-        for entry in entries[:SLACK_LIST_CAP]:
+        shown = [e for e in entries if not is_ignored(e, ignored)]
+        ignored_count = len(entries) - len(shown)
+        suffix = f" (ignored: {ignored_count})" if ignored_count else ""
+        lines.append(f"*{title}:* {len(entries)}{suffix}")
+        for entry in shown[:SLACK_LIST_CAP]:
             lines.append(f"• {affected_record_slack(entry)}")
-        if len(entries) > SLACK_LIST_CAP:
-            lines.append(f"…and {len(entries) - SLACK_LIST_CAP} more")
+        if len(shown) > SLACK_LIST_CAP:
+            lines.append(f"…and {len(shown) - SLACK_LIST_CAP} more")
 
     affected_section("Blueprints affected by deprecated NIMs (hosted)", "affected_hosted_nims")
     if not local_nims_safe:
@@ -225,10 +235,9 @@ def main() -> None:
     if not isinstance(affected, list):
         affected = []
 
-    # Drop ignored blueprints from the affected list entirely (HTML, Slack, color).
+    # Ignored blueprints stay in the report (counted and, in HTML, marked) but are
+    # excluded from the notification escalation so they don't flood Slack.
     ignored = {s.strip().lower() for s in args.ignore_blueprints.split(",") if s.strip()}
-    if ignored:
-        affected = [a for a in affected if not is_ignored(a, ignored)]
 
     html_path = Path(args.html_out)
     slack_path = Path(args.slack_out)
@@ -265,10 +274,10 @@ def main() -> None:
     deprecated_after = counts.get("repos_deprecated_after", "?")
 
     has_changes = bool(added_active or removed_active or added_deprecated)
+    # Only non-ignored affected blueprints escalate.
+    escalating = [a for a in affected if not is_ignored(a, ignored)]
     if args.affected_local_nims_safe:
-        escalating = entries_with(affected, "affected_hosted_nims")
-    else:
-        escalating = affected
+        escalating = entries_with(escalating, "affected_hosted_nims")
     if escalating:
         color = "danger"
     elif has_changes:
@@ -279,7 +288,7 @@ def main() -> None:
     html_path.write_text(
         render_html(
             args.run_number, args.run_url, active_after, deprecated_after,
-            added_active, removed_active, added_deprecated, affected,
+            added_active, removed_active, added_deprecated, affected, ignored,
         ),
         encoding="utf-8",
     )
@@ -288,7 +297,7 @@ def main() -> None:
             render_slack(
                 args.run_number, args.run_url, color, active_after, deprecated_after,
                 added_active, removed_active, added_deprecated, affected,
-                args.affected_local_nims_safe,
+                args.affected_local_nims_safe, ignored,
             ),
             indent=2,
         )
