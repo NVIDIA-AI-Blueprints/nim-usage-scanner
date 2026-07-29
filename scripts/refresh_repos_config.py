@@ -15,7 +15,7 @@ import argparse
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from urllib.parse import quote
@@ -468,14 +468,12 @@ def load_current_repos(
 
 def fetch_latest_repos(
     org_name: str = "qc69jvmznzxy", page_size: int = 1000, workers: int = 8
-) -> tuple[dict[str, BlueprintRepository], list[str]]:
+) -> tuple[dict[str, BlueprintRepository], dict[str, BlueprintRepository]]:
     """Step 2: list blueprints and resolve them to (active, deprecated) repos.
 
-    ``latest_active_repos`` maps each active repo name -> BlueprintRepository
-    (with its blueprints, including any newly-deprecated ones so a kept repo
-    still has data). ``latest_deprecated_repos`` is a list of names of repos
-    backing only deprecated blueprints. A repo backing any active blueprint is
-    treated as active.
+    Both returned dicts map repo name -> BlueprintRepository (with its
+    blueprints). A repo backing any active blueprint is treated as active;
+    ``latest_deprecated_repos`` holds repos backing only deprecated blueprints.
     """
     data = fetch_json(build_blueprint_list_url(page_size))
 
@@ -562,17 +560,21 @@ def fetch_latest_repos(
     # Active wins: a repo backing any active blueprint is active, not deprecated.
     deprecated_repos -= active_repos
 
-    # New active repos are written without branch/depth/enabled so they inherit
-    # the config-level defaults; the maintainer can add overrides by hand.
-    latest_active_repos = {
-        name: BlueprintRepository(
-            name=name,
-            url=f"https://github.com/{name}.git",
-            blueprints=dedupe_blueprints(repo_to_blueprints.get(name, [])),
-        )
-        for name in sorted(active_repos)
-    }
-    latest_deprecated_repos = sorted(deprecated_repos)
+    # Build full repo entries (name/url/blueprints) for both active and
+    # deprecated. Entries are written without branch/depth/enabled so they
+    # inherit the config-level defaults; the maintainer can add overrides by hand.
+    def make_repos(names: set[str]) -> dict[str, BlueprintRepository]:
+        return {
+            name: BlueprintRepository(
+                name=name,
+                url=f"https://github.com/{name}.git",
+                blueprints=dedupe_blueprints(repo_to_blueprints.get(name, [])),
+            )
+            for name in sorted(names)
+        }
+
+    latest_active_repos = make_repos(active_repos)
+    latest_deprecated_repos = make_repos(deprecated_repos)
 
     def print_diagnostics() -> None:
         """Operator diagnostics about resolving blueprints to GitHub repos."""
@@ -601,7 +603,7 @@ def calculate_difference(
     current_active_repos: dict[str, BlueprintRepository],
     current_deprecated_repos: list[str],
     latest_active_repos: dict[str, BlueprintRepository],
-    latest_deprecated_repos: list[str],
+    latest_deprecated_repos: dict[str, BlueprintRepository],
     prune_active: bool,
 ) -> tuple[dict[str, BlueprintRepository], list[str], dict]:
     """Step 3: reconcile current against latest -> (output_active_repos, output_deprecated_repos, summary).
@@ -625,7 +627,7 @@ def calculate_difference(
     # Only enabled active repos are reconciled against the catalog; disabled ones
     # are inactive and never reported as removed (nor pruned below).
     removed_active_repos_names = sorted(enabled_current_active_repos - latest_active_repos_names)
-    added_deprecated_repos = sorted(latest_deprecated_repos_names - current_deprecated_repos_names)
+    added_deprecated_repos_names = sorted(latest_deprecated_repos_names - current_deprecated_repos_names)
 
     # Preserve existing entries verbatim; refresh their blueprints from the
     # catalog; add newly-active repos. Repos no longer active are kept (their
@@ -645,13 +647,16 @@ def calculate_difference(
     output_active_repos_names = set(output_active_repos)
     # Deprecated never overlaps active (a reactivated repo drops out).
     output_deprecated_repos = sorted(
-        (current_deprecated_repos_names | set(added_deprecated_repos)) - output_active_repos_names
+        (current_deprecated_repos_names | set(added_deprecated_repos_names)) - output_active_repos_names
     )
 
+    # The summary is written verbatim; carry the full repo entry (name, github
+    # url, blueprints) for each changed repo so downstream can link them.
     summary = {
-        "added_active_repos_names": added_active_repos_names,
-        "removed_active_repos_names": removed_active_repos_names,
-        "added_deprecated_repos": added_deprecated_repos,
+        "added_active_repos": [asdict(latest_active_repos[n]) for n in added_active_repos_names],
+        "removed_active_repos": [asdict(current_active_repos[n]) for n in removed_active_repos_names],
+        "added_deprecated_repos": [asdict(latest_deprecated_repos[n]) for n in added_deprecated_repos_names],
+        "pruned_active": bool(prune_active),
         "counts": {
             "current_active": len(latest_active_repos_names),
             "current_deprecated": len(latest_deprecated_repos_names),
@@ -695,25 +700,19 @@ def write_config(
     output_path.write_text(content, encoding="utf-8")
 
 
-def write_summary(path: Path, summary: dict, prune_active: bool) -> None:
-    """Step 5a: write the machine-readable refresh summary JSON."""
-    data = {
-        "added_active_repos": summary["added_active_repos_names"],
-        "removed_active_repos": summary["removed_active_repos_names"],
-        "added_deprecated_repos": summary["added_deprecated_repos"],
-        "pruned_active": bool(prune_active),
-        "counts": summary["counts"],
-    }
+def write_summary(path: Path, summary: dict) -> None:
+    """Step 5a: write the refresh summary object to JSON as-is."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
 
-def print_summary(summary: dict, output_path: Path, summary_path: Path, prune_active: bool) -> None:
+def print_summary(summary: dict, output_path: Path, summary_path: Path) -> None:
     """Step 5b: print the reconciliation result for operators."""
     counts = summary["counts"]
-    added_active = summary["added_active_repos_names"]
-    removed_active = summary["removed_active_repos_names"]
+    added_active = summary["added_active_repos"]
+    removed_active = summary["removed_active_repos"]
     added_deprecated = summary["added_deprecated_repos"]
+    prune_active = summary["pruned_active"]
     print(f"{LOG_PREFIX} Current: {counts['current_active']} active, {counts['current_deprecated']} deprecated")
     print(
         f"{LOG_PREFIX} Active added: {len(added_active)}, removed: {len(removed_active)}"
@@ -723,16 +722,16 @@ def print_summary(summary: dict, output_path: Path, summary_path: Path, prune_ac
     print(f"{LOG_PREFIX} Wrote {output_path} and {summary_path}")
     if added_active:
         print(f"{LOG_PREFIX} Added active:")
-        for name in added_active:
-            print(f"  + {name}")
+        for repo in added_active:
+            print(f"  + {repo['name']}")
     if removed_active:
         print(f"{LOG_PREFIX} Removed active (candidates):")
-        for name in removed_active:
-            print(f"  - {name}")
+        for repo in removed_active:
+            print(f"  - {repo['name']}")
     if added_deprecated:
         print(f"{LOG_PREFIX} Added deprecated:")
-        for name in added_deprecated:
-            print(f"  ! {name}")
+        for repo in added_deprecated:
+            print(f"  ! {repo['name']}")
 
 
 # ===========================================================================
@@ -798,8 +797,8 @@ def main() -> None:
 
     # 5. Write and print the summary.
     summary_path = Path(args.summary_json)
-    write_summary(summary_path, summary, args.prune_active)
-    print_summary(summary, output_path, summary_path, args.prune_active)
+    write_summary(summary_path, summary)
+    print_summary(summary, output_path, summary_path)
 
 
 if __name__ == "__main__":

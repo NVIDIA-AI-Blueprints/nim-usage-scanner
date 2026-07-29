@@ -56,6 +56,44 @@ def entries_with(affected: list, nims_key: str) -> list:
     return [e for e in affected if e.get(nims_key)]
 
 
+def repo_github_url(entry: dict) -> str:
+    """Web URL for a repo entry's GitHub repository (no trailing .git)."""
+    url = entry.get("url") or f"https://github.com/{entry.get('name', '')}"
+    return url.removesuffix(".git")
+
+
+def blueprint_records(entries: list) -> list[tuple[str, str, str]]:
+    """Flatten repo entries into (label, build_url, github_url) records, one per blueprint.
+
+    A repo with no blueprints yields a single fallback record labelled by the repo
+    name with no build-page link.
+    """
+    records: list[tuple[str, str, str]] = []
+    for entry in entries:
+        github = repo_github_url(entry)
+        blueprints = entry.get("blueprints") or []
+        if blueprints:
+            for bp in blueprints:
+                records.append((bp.get("name") or entry.get("name", ""), bp.get("url") or "", github))
+        else:
+            records.append((entry.get("name", ""), "", github))
+    return records
+
+
+def record_html(label: str, build_url: str, github_url: str) -> str:
+    """Render one `<blueprint>: Repository` record as HTML, blueprint -> build page."""
+    name_html = (
+        f'<a href="{html.escape(build_url)}">{html.escape(label)}</a>' if build_url else html.escape(label)
+    )
+    return f'{name_html}: <a href="{html.escape(github_url)}">Repository</a>'
+
+
+def record_slack(label: str, build_url: str, github_url: str) -> str:
+    """Render one `<blueprint>: Repository` record as Slack mrkdwn, blueprint -> build page."""
+    name_txt = f"<{build_url}|{label}>" if build_url else label
+    return f"{name_txt}: <{github_url}|Repository>"
+
+
 def render_html(
     run_number: str,
     run_url: str,
@@ -66,12 +104,13 @@ def render_html(
     added_deprecated: list,
     affected: list,
 ) -> str:
-    def details(title: str, items: list) -> str:
-        if not items:
+    def details(title: str, entries: list) -> str:
+        records = blueprint_records(entries)
+        if not records:
             return ""
-        lis = "\n".join(f"<li>{html.escape(str(i))}</li>" for i in items)
+        lis = "\n".join(f"<li>{record_html(*r)}</li>" for r in records)
         return (
-            f"<details><summary>{html.escape(title)} ({len(items)})</summary>\n"
+            f"<details><summary>{html.escape(title)} ({len(records)})</summary>\n"
             f"<ul>\n{lis}\n</ul>\n</details>"
         )
 
@@ -128,6 +167,20 @@ def render_slack(
         f"*Repos refresh:* active {active_after} (added {len(added_active)}, removed {len(removed_active)}), "
         f"deprecated {deprecated_after} (added {len(added_deprecated)})",
     ]
+
+    def refresh_section(title: str, entries: list) -> None:
+        records = blueprint_records(entries)
+        if not records:
+            return
+        lines.append(f"*{title}:* {len(records)}")
+        for record in records[:SLACK_LIST_CAP]:
+            lines.append(f"• {record_slack(*record)}")
+        if len(records) > SLACK_LIST_CAP:
+            lines.append(f"…and {len(records) - SLACK_LIST_CAP} more")
+
+    refresh_section("Added active", added_active)
+    refresh_section("Removed active", removed_active)
+    refresh_section("Added deprecated", added_deprecated)
 
     def affected_section(title: str, nims_key: str) -> None:
         entries = entries_with(affected, nims_key)
