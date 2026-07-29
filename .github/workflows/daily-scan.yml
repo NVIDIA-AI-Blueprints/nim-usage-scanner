@@ -108,7 +108,7 @@ jobs:
         continue-on-error: true
         env:
           SLACK_BOT_OAUTH_TOKEN: ${{ secrets.CI_SLACK_BOT_OAUTH_TOKEN }}
-          JOB_FAILED: ${{ failure() }}
+          JOB_STATUS: ${{ job.status }}
           COLOR: ${{ steps.summary.outputs.color }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -130,7 +130,7 @@ jobs:
           }
 
           # Job failed -> danger alert to the owner only.
-          if [ "$JOB_FAILED" = "true" ]; then
+          if [ "$JOB_STATUS" = "failure" ]; then
             payload=$(jq -n \
               --arg ch "$SLACK_OWNER" \
               --arg title ":rotating_light: Daily NIM Usage Scan #${GITHUB_RUN_NUMBER} failed" \
