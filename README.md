@@ -143,7 +143,7 @@ Behavior:
 - Newly deprecated blueprints are added to `repos_deprecated`.
 - `repos_github_only` is never touched (manually curated).
 - Enabled active repos no longer returned by the catalog are reported as
-  `removed_active_blueprints` but only deleted when you pass `--prune-active`.
+  `removed_active_repos` but only deleted when you pass `--prune-active`.
   Disabled entries (`enabled: false`) are treated as inactive — they are never
   flagged as removed or pruned.
 

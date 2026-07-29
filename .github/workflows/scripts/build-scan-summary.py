@@ -208,9 +208,9 @@ def main() -> None:
         write_color(color)
         return
 
-    added_active = summary.get("added_active_blueprints") or []
-    removed_active = summary.get("removed_active_blueprints") or []
-    added_deprecated = summary.get("added_deprecated_blueprints") or []
+    added_active = summary.get("added_active_repos") or []
+    removed_active = summary.get("removed_active_repos") or []
+    added_deprecated = summary.get("added_deprecated_repos") or []
     counts = summary.get("counts") or {}
     active_after = counts.get("repos_active_after", "?")
     deprecated_after = counts.get("repos_deprecated_after", "?")

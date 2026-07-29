@@ -316,9 +316,9 @@ def dedupe_blueprints(blueprints: list[dict]) -> list[dict]:
 # ===========================================================================
 
 def render_repos_yaml(
-    active: list[BlueprintRepository],
-    github_only: list[BlueprintRepository],
-    deprecated: list[str],
+    active_repos: list[BlueprintRepository],
+    github_only_repos: list[BlueprintRepository],
+    deprecated_repos: list[str],
     header: dict,
 ) -> str:
     """Render the full repos.yaml text.
@@ -427,14 +427,14 @@ def render_repos_yaml(
         f"  depth: {header['depth']}",
         "",
     ]
-    lines += active_section("# Active on Build and not deprecated. Scanned.", active)
+    lines += active_section("# Active on Build and not deprecated. Scanned.", active_repos)
     lines.append("")
     lines += object_section(
-        "repos_github_only", "# Only on GitHub (not returned by the Build API). Scanned.", github_only
+        "repos_github_only", "# Only on GitHub (not returned by the Build API). Scanned.", github_only_repos
     )
     lines.append("")
     lines += name_section(
-        "repos_deprecated", "# Deprecated on Build (DEPRECATION attribute). NOT scanned.", deprecated
+        "repos_deprecated", "# Deprecated on Build (DEPRECATION attribute). NOT scanned.", deprecated_repos
     )
     return "\n".join(lines) + "\n"
 
@@ -455,15 +455,15 @@ def load_current_repos(
     """
     config = load_config(path)
 
-    current_repos_active: dict[str, BlueprintRepository] = {}
+    current_active_repos: dict[str, BlueprintRepository] = {}
     for entry in config.get("repos_active") or []:
         repo = parse_repo_entry(entry)
         if repo:
-            current_repos_active[repo.name] = repo
+            current_active_repos[repo.name] = repo
 
-    current_repos_deprecated = [n for n in (entry_name(e) for e in config.get("repos_deprecated") or []) if n]
+    current_deprecated_repos = [n for n in (entry_name(e) for e in config.get("repos_deprecated") or []) if n]
 
-    return current_repos_active, current_repos_deprecated
+    return current_active_repos, current_deprecated_repos
 
 
 def fetch_latest_repos(
@@ -471,9 +471,9 @@ def fetch_latest_repos(
 ) -> tuple[dict[str, BlueprintRepository], list[str]]:
     """Step 2: list blueprints and resolve them to (active, deprecated) repos.
 
-    ``latest_repos_active`` maps each active repo name -> BlueprintRepository
+    ``latest_active_repos`` maps each active repo name -> BlueprintRepository
     (with its blueprints, including any newly-deprecated ones so a kept repo
-    still has data). ``latest_repos_deprecated`` is a list of names of repos
+    still has data). ``latest_deprecated_repos`` is a list of names of repos
     backing only deprecated blueprints. A repo backing any active blueprint is
     treated as active.
     """
@@ -564,7 +564,7 @@ def fetch_latest_repos(
 
     # New active repos are written without branch/depth/enabled so they inherit
     # the config-level defaults; the maintainer can add overrides by hand.
-    latest_repos_active = {
+    latest_active_repos = {
         name: BlueprintRepository(
             name=name,
             url=f"https://github.com/{name}.git",
@@ -572,7 +572,7 @@ def fetch_latest_repos(
         )
         for name in sorted(active_repos)
     }
-    latest_repos_deprecated = sorted(deprecated_repos)
+    latest_deprecated_repos = sorted(deprecated_repos)
 
     def print_diagnostics() -> None:
         """Operator diagnostics about resolving blueprints to GitHub repos."""
@@ -594,79 +594,81 @@ def fetch_latest_repos(
                     print(f"    * {resource_id}")
 
     print_diagnostics()
-    return latest_repos_active, latest_repos_deprecated
+    return latest_active_repos, latest_deprecated_repos
 
 
 def calculate_difference(
-    current_active: dict[str, BlueprintRepository],
-    current_deprecated: list[str],
-    latest_active: dict[str, BlueprintRepository],
-    latest_deprecated: list[str],
+    current_active_repos: dict[str, BlueprintRepository],
+    current_deprecated_repos: list[str],
+    latest_active_repos: dict[str, BlueprintRepository],
+    latest_deprecated_repos: list[str],
     prune_active: bool,
 ) -> tuple[dict[str, BlueprintRepository], list[str], dict]:
-    """Step 3: reconcile current against latest -> (output_active, output_deprecated, summary).
+    """Step 3: reconcile current against latest -> (output_active_repos, output_deprecated_repos, summary).
 
     GitHub-only repos are deliberately not excluded: a repo currently tracked as
     GitHub-only that goes live on the catalog surfaces here as a newly-added
     active repo (the maintainer then drops it from the github-only list).
     """
-    current_active_names = set(current_active)
+    current_active_repos_names = set(current_active_repos)
     # Disabled active entries (enabled: false) are intentionally parked; treat
     # them as inactive so a refresh does not flag them as removed or prune them.
-    enabled_current_active = {name for name, repo in current_active.items() if repo.enabled is not False}
-    current_deprecated_names = set(current_deprecated)
+    enabled_current_active_repos = {
+        name for name, repo in current_active_repos.items() if repo.enabled is not False
+    }
+    current_deprecated_repos_names = set(current_deprecated_repos)
 
-    latest_active_names = set(latest_active)
-    latest_deprecated_names = set(latest_deprecated)
+    latest_active_repos_names = set(latest_active_repos)
+    latest_deprecated_repos_names = set(latest_deprecated_repos)
 
-    added_repos_active_names = sorted(latest_active_names - current_active_names)
+    added_active_repos_names = sorted(latest_active_repos_names - current_active_repos_names)
     # Only enabled active repos are reconciled against the catalog; disabled ones
     # are inactive and never reported as removed (nor pruned below).
-    removed_repos_active_names = sorted(enabled_current_active - latest_active_names)
-    added_repos_deprecated = sorted(latest_deprecated_names - current_deprecated_names)
+    removed_active_repos_names = sorted(enabled_current_active_repos - latest_active_repos_names)
+    added_deprecated_repos = sorted(latest_deprecated_repos_names - current_deprecated_repos_names)
 
     # Preserve existing entries verbatim; refresh their blueprints from the
     # catalog; add newly-active repos. Repos no longer active are kept (their
     # blueprint data comes from the current config) unless --prune-active.
-    output_repos_active = dict(current_active)
-    for name in sorted(latest_active_names):
-        if name in output_repos_active:
-            output_repos_active[name] = replace(
-                output_repos_active[name], blueprints=latest_active[name].blueprints
+    output_active_repos = dict(current_active_repos)
+    for name in sorted(latest_active_repos_names):
+        if name in output_active_repos:
+            output_active_repos[name] = replace(
+                output_active_repos[name], blueprints=latest_active_repos[name].blueprints
             )
         else:
-            output_repos_active[name] = latest_active[name]
+            output_active_repos[name] = latest_active_repos[name]
     if prune_active:
-        for name in removed_repos_active_names:
-            output_repos_active.pop(name, None)
+        for name in removed_active_repos_names:
+            output_active_repos.pop(name, None)
 
-    output_active_names = set(output_repos_active)
+    output_active_repos_names = set(output_active_repos)
     # Deprecated never overlaps active (a reactivated repo drops out).
-    output_repos_deprecated = sorted(
-        (current_deprecated_names | set(added_repos_deprecated)) - output_active_names
+    output_deprecated_repos = sorted(
+        (current_deprecated_repos_names | set(added_deprecated_repos)) - output_active_repos_names
     )
 
     summary = {
-        "added_repos_active_names": added_repos_active_names,
-        "removed_repos_active_names": removed_repos_active_names,
-        "added_repos_deprecated": added_repos_deprecated,
+        "added_active_repos_names": added_active_repos_names,
+        "removed_active_repos_names": removed_active_repos_names,
+        "added_deprecated_repos": added_deprecated_repos,
         "counts": {
-            "current_active": len(latest_active_names),
-            "current_deprecated": len(latest_deprecated_names),
-            "repos_active_before": len(current_active_names),
-            "repos_active_after": len(output_repos_active),
-            "repos_deprecated_before": len(current_deprecated_names),
-            "repos_deprecated_after": len(output_repos_deprecated),
+            "current_active": len(latest_active_repos_names),
+            "current_deprecated": len(latest_deprecated_repos_names),
+            "repos_active_before": len(current_active_repos_names),
+            "repos_active_after": len(output_active_repos),
+            "repos_deprecated_before": len(current_deprecated_repos_names),
+            "repos_deprecated_after": len(output_deprecated_repos),
         },
     }
-    return output_repos_active, output_repos_deprecated, summary
+    return output_active_repos, output_deprecated_repos, summary
 
 
 def write_config(
     config_path: Path,
     output_path: Path,
-    output_active: dict[str, BlueprintRepository],
-    output_deprecated: list[str],
+    output_active_repos: dict[str, BlueprintRepository],
+    output_deprecated_repos: list[str],
 ) -> None:
     """Step 4: render and write the updated repos.yaml.
 
@@ -680,11 +682,13 @@ def write_config(
         "branch": defaults.get("branch"),
         "depth": defaults.get("depth"),
     }
-    github_only = [repo for repo in (parse_repo_entry(e) for e in config.get("repos_github_only") or []) if repo]
+    github_only_repos = [
+        repo for repo in (parse_repo_entry(e) for e in config.get("repos_github_only") or []) if repo
+    ]
     content = render_repos_yaml(
-        list(output_active.values()),
-        github_only,
-        output_deprecated,
+        list(output_active_repos.values()),
+        github_only_repos,
+        output_deprecated_repos,
         header,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -694,9 +698,9 @@ def write_config(
 def write_summary(path: Path, summary: dict, prune_active: bool) -> None:
     """Step 5a: write the machine-readable refresh summary JSON."""
     data = {
-        "added_active_blueprints": summary["added_repos_active_names"],
-        "removed_active_blueprints": summary["removed_repos_active_names"],
-        "added_deprecated_blueprints": summary["added_repos_deprecated"],
+        "added_active_repos": summary["added_active_repos_names"],
+        "removed_active_repos": summary["removed_active_repos_names"],
+        "added_deprecated_repos": summary["added_deprecated_repos"],
         "pruned_active": bool(prune_active),
         "counts": summary["counts"],
     }
@@ -707,9 +711,9 @@ def write_summary(path: Path, summary: dict, prune_active: bool) -> None:
 def print_summary(summary: dict, output_path: Path, summary_path: Path, prune_active: bool) -> None:
     """Step 5b: print the reconciliation result for operators."""
     counts = summary["counts"]
-    added_active = summary["added_repos_active_names"]
-    removed_active = summary["removed_repos_active_names"]
-    added_deprecated = summary["added_repos_deprecated"]
+    added_active = summary["added_active_repos_names"]
+    removed_active = summary["removed_active_repos_names"]
+    added_deprecated = summary["added_deprecated_repos"]
     print(f"{LOG_PREFIX} Current: {counts['current_active']} active, {counts['current_deprecated']} deprecated")
     print(
         f"{LOG_PREFIX} Active added: {len(added_active)}, removed: {len(removed_active)}"
@@ -772,25 +776,25 @@ def main() -> None:
         raise SystemExit("Specify --output PATH or --in-place to write the updated config.")
 
     # 1. Load the current config.
-    current_active, current_deprecated = load_current_repos(config_path)
+    current_active_repos, current_deprecated_repos = load_current_repos(config_path)
 
     # 2. Fetch the latest blueprints from the Build catalog.
-    latest_active, latest_deprecated = fetch_latest_repos()
-    if not latest_active and not latest_deprecated:
+    latest_active_repos, latest_deprecated_repos = fetch_latest_repos()
+    if not latest_active_repos and not latest_deprecated_repos:
         print("Error: No blueprints found from NGC API.")
         raise SystemExit(1)
 
     # 3. Calculate the difference between current and latest.
-    output_active, output_deprecated, summary = calculate_difference(
-        current_active,
-        current_deprecated,
-        latest_active,
-        latest_deprecated,
+    output_active_repos, output_deprecated_repos, summary = calculate_difference(
+        current_active_repos,
+        current_deprecated_repos,
+        latest_active_repos,
+        latest_deprecated_repos,
         args.prune_active,
     )
 
     # 4. Write the updated config (github-only repos pass through unchanged).
-    write_config(config_path, output_path, output_active, output_deprecated)
+    write_config(config_path, output_path, output_active_repos, output_deprecated_repos)
 
     # 5. Write and print the summary.
     summary_path = Path(args.summary_json)
