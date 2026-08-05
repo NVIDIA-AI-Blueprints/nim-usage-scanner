@@ -41,6 +41,10 @@ NGC_BLUEPRINTS_SPEC_URL_TEMPLATE = "https://api.ngc.nvidia.com/v2/blueprints/{or
 # Prefix for operator log lines.
 LOG_PREFIX = "[Build Page]"
 
+# NVIDIA-owned GitHub owners whose names don't start with "nvidia"; blueprints
+# under them are categorized as NVIDIA's own, not as Partner Examples.
+NVIDIA_GITHUB_OWNERS = {"rapidsai"}
+
 
 # ===========================================================================
 # Data model
@@ -238,11 +242,17 @@ def publisher_of(resource: dict) -> str:
     return "nvidia"
 
 
+def is_nvidia_owner(repo_name: str) -> bool:
+    """True when the repo's GitHub owner is NVIDIA's, by name prefix or known alias."""
+    owner = repo_name.split("/", 1)[0].lower()
+    return owner.startswith("nvidia") or owner in NVIDIA_GITHUB_OWNERS
+
+
 def category_label(repo_name: str, types: set[str]) -> str:
     """Singular category label for a blueprint, from its catalog types and owner."""
     if "apicatalogtype_nemoclaw_blueprint" in types:
         category = BlueprintCategory.NEMOCLAW
-    elif not repo_name.split("/", 1)[0].lower().startswith("nvidia"):
+    elif not is_nvidia_owner(repo_name):
         category = BlueprintCategory.PARTNER
     elif "apicatalogtype_enterprise_blueprint" in types:
         category = BlueprintCategory.ENTERPRISE

@@ -167,6 +167,12 @@ repos_active:
     url: https://github.com/NVIDIA-AI-Blueprints/vulnerability-analysis.git
     enabled: false
     blueprints: []
+  - name: rapidsai/gqe
+    url: https://github.com/rapidsai/gqe.git
+    blueprints:
+      - name: GPU Query Engine (GQE)
+        url: https://build.nvidia.com/nvidia/gpu-query-engine
+        category: Developer Example
 
   # Partner Examples
   - name: bubbleran/Telco-Network-Configuration
