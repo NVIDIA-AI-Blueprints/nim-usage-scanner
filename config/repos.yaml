@@ -11,18 +11,6 @@ defaults:
 # Active on Build and not deprecated. Scanned.
 repos_active:
   # Enterprise Blueprints
-  - name: NVIDIA-AI-Blueprints/aiq
-    url: https://github.com/NVIDIA-AI-Blueprints/aiq.git
-    blueprints:
-      - name: NVIDIA AI-Q Blueprint for intelligent agents
-        url: https://build.nvidia.com/nvidia/aiq
-        category: Enterprise Blueprint
-  - name: NVIDIA-AI-Blueprints/rag
-    url: https://github.com/NVIDIA-AI-Blueprints/rag.git
-    blueprints:
-      - name: Build an Enterprise RAG Pipeline Blueprint
-        url: https://build.nvidia.com/nvidia/build-an-enterprise-rag-pipeline
-        category: Enterprise Blueprint
   - name: NVIDIA-AI-Blueprints/video-search-and-summarization
     url: https://github.com/NVIDIA-AI-Blueprints/video-search-and-summarization.git
     blueprints:
@@ -72,6 +60,12 @@ repos_active:
     blueprints:
       - name: AI Model Distillation for Financial Data
         url: https://build.nvidia.com/nvidia/ai-model-distillation-for-financial-data
+        category: Developer Example
+  - name: NVIDIA-AI-Blueprints/aiq
+    url: https://github.com/NVIDIA-AI-Blueprints/aiq.git
+    blueprints:
+      - name: NVIDIA Deep Researcher Agent
+        url: https://build.nvidia.com/nvidia/aiq
         category: Developer Example
   - name: NVIDIA-AI-Blueprints/ambient-healthcare-agents
     url: https://github.com/NVIDIA-AI-Blueprints/ambient-healthcare-agents.git
@@ -127,6 +121,12 @@ repos_active:
       - name: Quantitative Signal Discovery Agent
         url: https://build.nvidia.com/nvidia/quantitative-signal-discovery-agent
         category: Developer Example
+  - name: NVIDIA-AI-Blueprints/rag
+    url: https://github.com/NVIDIA-AI-Blueprints/rag.git
+    blueprints:
+      - name: Build a RAG Pipeline Blueprint
+        url: https://build.nvidia.com/nvidia/build-a-rag-pipeline
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/Retail-Agentic-Commerce
     url: https://github.com/NVIDIA-AI-Blueprints/Retail-Agentic-Commerce.git
     blueprints:
@@ -166,7 +166,16 @@ repos_active:
   - name: NVIDIA-AI-Blueprints/vulnerability-analysis
     url: https://github.com/NVIDIA-AI-Blueprints/vulnerability-analysis.git
     enabled: false
-    blueprints: []
+    blueprints:
+      - name: Vulnerability Analysis for Container Security
+        url: https://build.nvidia.com/nvidia/vulnerability-analysis-for-container-security
+        category: Developer Example
+  - name: NVIDIA/AI-Factory-Operations-Agent
+    url: https://github.com/NVIDIA/AI-Factory-Operations-Agent.git
+    blueprints:
+      - name: AI Factory Operations Agent
+        url: https://build.nvidia.com/nvidia/operate-ai-factories-with-agents
+        category: Developer Example
   - name: rapidsai/gqe
     url: https://github.com/rapidsai/gqe.git
     blueprints:
