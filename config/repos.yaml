@@ -61,12 +61,6 @@ repos_active:
       - name: AI Model Distillation for Financial Data
         url: https://build.nvidia.com/nvidia/ai-model-distillation-for-financial-data
         category: Developer Example
-  - name: NVIDIA-AI-Blueprints/aiq
-    url: https://github.com/NVIDIA-AI-Blueprints/aiq.git
-    blueprints:
-      - name: NVIDIA Deep Researcher Agent
-        url: https://build.nvidia.com/nvidia/aiq
-        category: Developer Example
   - name: NVIDIA-AI-Blueprints/ambient-healthcare-agents
     url: https://github.com/NVIDIA-AI-Blueprints/ambient-healthcare-agents.git
     blueprints:
@@ -78,6 +72,12 @@ repos_active:
     blueprints:
       - name: Content Localization
         url: https://build.nvidia.com/nvidia/content-localization
+        category: Developer Example
+  - name: NVIDIA-AI-Blueprints/deep-researcher-agent
+    url: https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent.git
+    blueprints:
+      - name: NVIDIA Deep Researcher Agent
+        url: https://build.nvidia.com/nvidia/aiq
         category: Developer Example
   - name: NVIDIA-AI-Blueprints/Financial-Fraud-Detection
     url: https://github.com/NVIDIA-AI-Blueprints/Financial-Fraud-Detection.git
