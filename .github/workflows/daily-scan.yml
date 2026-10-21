@@ -31,7 +31,7 @@ on:
       ignored_blueprints:
         description: 'Comma-separated blueprint names or repos to ignore in the scan summary'
         type: string
-        default: 'NVIDIA/NemoClaw'
+        default: 'NVIDIA/NemoClaw,NVIDIA/nemoclaw-community'
 
 permissions:
   contents: read
@@ -49,7 +49,7 @@ jobs:
       RUST_LOG: info
       ALWAYS_SEND_SLACK: ${{ github.event.inputs.always_send_slack || 'true' }}
       SLACK_CHANNEL: ${{ github.event.inputs.slack_channel || 'vrdc-bpqa-monitoring' }}
-      IGNORED_BLUEPRINTS: ${{ github.event.inputs.ignored_blueprints || 'NVIDIA/NemoClaw' }}
+      IGNORED_BLUEPRINTS: ${{ github.event.inputs.ignored_blueprints || 'NVIDIA/NemoClaw,NVIDIA/nemoclaw-community' }}
       SLACK_OWNER: 'U0B3BBFQVSR'
     steps:
       - name: Checkout

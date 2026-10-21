@@ -77,7 +77,7 @@ repos_active:
     url: https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent.git
     blueprints:
       - name: NVIDIA Deep Researcher Agent
-        url: https://build.nvidia.com/nvidia/aiq
+        url: https://build.nvidia.com/nvidia/deep-researcher-agent
         category: Developer Example
   - name: NVIDIA-AI-Blueprints/Financial-Fraud-Detection
     url: https://github.com/NVIDIA-AI-Blueprints/Financial-Fraud-Detection.git
@@ -203,6 +203,12 @@ repos_active:
         category: NemoClaw
       - name: NemoClaw for OpenClaw
         url: https://build.nvidia.com/nvidia/nemoclaw-for-openclaw
+        category: NemoClaw
+  - name: NVIDIA/nemoclaw-community
+    url: https://github.com/NVIDIA/nemoclaw-community.git
+    blueprints:
+      - name: NVIDIA NemoClaw for Agent Optimization
+        url: https://build.nvidia.com/nvidia/nemoclaw-for-agent-optimization
         category: NemoClaw
 
 # Only on GitHub (not returned by the Build API). Scanned.
