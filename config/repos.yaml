@@ -79,6 +79,12 @@ repos_active:
       - name: NVIDIA Deep Researcher Agent
         url: https://build.nvidia.com/nvidia/deep-researcher-agent
         category: Developer Example
+  - name: NVIDIA-AI-Blueprints/docsfab
+    url: https://github.com/NVIDIA-AI-Blueprints/docsfab.git
+    blueprints:
+      - name: DocsFab
+        url: https://build.nvidia.com/nvidia/docsfab
+        category: Developer Example
   - name: NVIDIA-AI-Blueprints/Financial-Fraud-Detection
     url: https://github.com/NVIDIA-AI-Blueprints/Financial-Fraud-Detection.git
     blueprints:
